@@ -356,7 +356,8 @@ function App() {
           <button className="main-add-btn" onClick={() => addTask()}>+ Add New Task</button>
           <div className="shortcuts">
             <span><b>Enter</b> New Task</span>
-            <span><b>Tab / Shift+Tab</b> Indent</span>
+            <span><b>Tab</b> Indent</span>
+            <span><b>Shift + Tab</b> Outdent</span>
             <span><b>Ctrl + Shift + D</b> Delete Block</span>
           </div>
         </div>
