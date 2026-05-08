@@ -16,12 +16,18 @@
 .header-top h1 { font-size: 24px; color: #111827; }
 .header-top h1 small { font-size: 12px; background: var(--primary); color: white; padding: 2px 6px; border-radius: 4px; margin-left: 10px; }
 
+.bulk-actions { display: flex; gap: 8px; }
+
 .secondary-btn {
   background: white; border: 1px solid var(--border); padding: 7px 15px;
   border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 600; 
   color: #4b5563; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 .secondary-btn:hover { background: #f9fafb; color: #111827; border-color: #9ca3af; }
+
+.print-btn { background: #eff6ff; color: var(--primary); border-color: #bfdbfe; }
+.print-btn:hover { background: #dbeafe; border-color: #93c5fd; }
+
 .delete-all:hover { color: #ef4444; border-color: #fca5a5; background: #fff5f5; }
 
 .wbs-container { 
@@ -32,7 +38,6 @@
 
 .wbs-table { display: flex; flex-direction: column; width: 100%; }
 
-/* Stretching columns ensures vertical lines are unbroken */
 .wbs-row { 
   display: flex; 
   align-items: stretch; 
@@ -44,7 +49,6 @@
 .wbs-row:hover { background: #fafafa; }
 .z-top { z-index: 100 !important; }
 
-/* Grid Vertical Borders */
 .col { 
   padding: 0 12px; 
   flex-shrink: 0; 
@@ -53,7 +57,6 @@
   border-right: 1px solid var(--grid-line);
 }
 
-/* Header Alignment Fixes */
 .header-row { 
   background: #f8fafc; 
   font-size: 10px; 
@@ -71,11 +74,10 @@
     height: 100%;
 }
 
-/* Specific Widths for Header/Body Sync */
 .drag-handle-placeholder, .drag-handle { width: 40px; justify-content: center; }
 .drag-handle { padding-top: 18px; color: #d1d5db; font-size: 18px; cursor: grab; }
 
-.num-col { width: 90px; font-weight: 800; color: #4b5563; padding-top: 18px; }
+.num-col { width: 90px; font-weight: 800; color: #4b5563; padding-top: 18px; display: flex; align-items: center; }
 .task-col { width: 300px; }
 .assigned-col { width: 200px; }
 .contractor-col { width: 150px; }
@@ -85,7 +87,6 @@
 .remarks-col { flex: 1; min-width: 250px; }
 .action-col { width: 55px; justify-content: center; border-right: none; align-items: center; padding-top: 0; flex-shrink: 0; }
 
-/* Clean Input Containment */
 .task-input-wrapper { width: 100%; padding-top: var(--input-offset); }
 .task-input-field {
   width: 100%; border: none; padding: 12px 0; font-size: 14px; background: transparent; font-weight: 500;
@@ -97,7 +98,7 @@
   height: 44px; 
   border: 1px solid var(--border);
   border-radius: 6px; 
-  padding: 0; /* Padding handled by internal input to avoid "boxes coming out" */
+  padding: 0; 
   font-size: 13px; 
   background: white;
   display: flex; 
@@ -107,7 +108,6 @@
   margin-bottom: 12px;
 }
 
-/* Internal inputs strip browser styling */
 .clean-input { 
   width: 100%; 
   border: none; 
@@ -118,7 +118,6 @@
   outline: none;
 }
 
-/* Hide number field arrows (spin buttons) that mess up layout */
 .clean-input::-webkit-outer-spin-button,
 .clean-input::-webkit-inner-spin-button {
   -webkit-appearance: none;
@@ -126,7 +125,6 @@
 }
 .clean-input[type=number] { -moz-appearance: textfield; }
 
-/* Normalize Date Picker Layout */
 .date-input { font-family: monospace; font-size: 11px; color: #374151; }
 
 .remarks-textarea {
@@ -140,7 +138,6 @@
 }
 .remarks-textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(37,99,235,0.1); }
 
-/* Blue Toggle Triangles */
 .collapse-toggle {
   background: none; border: none; cursor: pointer; font-size: 10px;
   color: var(--primary); width: 18px; margin-right: 4px; padding: 0;
@@ -148,7 +145,6 @@
 }
 .collapse-toggle.hidden { visibility: hidden; }
 
-/* Assigned To Popover */
 .popover-menu {
   position: absolute; top: calc(100% + 5px); right: 0; z-index: 1001; background: white;
   border: 1px solid var(--border); border-radius: 8px; padding: 0;

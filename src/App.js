@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import './App.css';
 
 const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh", "Lokesh", "Jay"];
@@ -40,6 +42,68 @@ function App() {
     }
     return lastIndex;
   }, [tasks]);
+
+  const generateWBSString = (index) => {
+    let counters = [0, 0, 0, 0, 0, 0], prev = -1;
+    for (let i = 0; i <= index; i++) {
+      if (tasks[i].level > prev) {
+        counters.fill(0, tasks[i].level);
+        counters[tasks[i].level] = 1;
+      } else {
+        counters[tasks[i].level]++;
+      }
+      prev = tasks[i].level;
+    }
+    return counters.slice(0, tasks[index].level + 1).join('.');
+  };
+
+  const exportToPDF = () => {
+    const doc = new jsPDF('l', 'mm', 'a4');
+    const today = new Date().toLocaleDateString('en-GB', { 
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' 
+    });
+
+    // Replicating Reference Header Style [cite: 1, 2, 3, 4]
+    doc.setFontSize(16);
+    doc.text("WBS-Project Report", 14, 15);
+    doc.setFontSize(10);
+    doc.text("Work Breakdown Structure", 14, 22);
+    doc.text(today, 14, 28);
+
+    const tableData = tasks.map((task, index) => {
+      const wbsNum = generateWBSString(index);
+      const indent = "  ".repeat(task.level);
+      return [
+        wbsNum,
+        indent + task.text,
+        task.assignedTo.join(', ') || '-',
+        task.contractor || '-',
+        task.status,
+        task.endDate || '-',
+        task.remarks || '-'
+      ];
+    });
+
+    autoTable(doc, {
+      startY: 35,
+      head: [['WBS', 'Task', 'Stakeholders', 'Owner', 'Status', 'Due', 'Notes']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillGray: [240, 240, 240], textColor: [50, 50, 50], fontStyle: 'bold', fontSize: 9 },
+      styles: { fontSize: 8, cellPadding: 3, valign: 'middle' },
+      columnStyles: {
+        0: { cellWidth: 18 }, // WBS
+        1: { cellWidth: 70 }, // Task
+        2: { cellWidth: 40 }, // Stakeholders
+        3: { cellWidth: 30 }, // Owner
+        4: { cellWidth: 25 }, // Status
+        5: { cellWidth: 25 }, // Due
+        6: { cellWidth: 'auto' } // Notes
+      }
+    });
+
+    doc.save(`WBS_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+  };
 
   const updateDates = (task, field, value) => {
     let { startDate, days, endDate } = { ...task, [field]: value };
@@ -143,6 +207,7 @@ function App() {
         <div className="header-top">
           <h1>WBS Pro <small>4.8</small></h1>
           <div className="bulk-actions">
+            <button className="secondary-btn print-btn" onClick={exportToPDF}>Print PDF</button>
             <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
             <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
             <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && setTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-' }])}>Clear All</button>
@@ -199,15 +264,7 @@ function App() {
                               <button className={`collapse-toggle ${hasChildren ? '' : 'hidden'}`} onClick={() => toggleSelection(task.id, 'isCollapsed', !task.isCollapsed)}>
                                 {task.isCollapsed ? '▶' : '▼'}
                               </button>
-                              {(function(){
-                                let counters = [0,0,0,0,0,0], prev = -1;
-                                for(let i=0; i<=index; i++){
-                                  if(tasks[i].level > prev) { counters.fill(0, tasks[i].level); counters[tasks[i].level]=1; }
-                                  else counters[tasks[i].level]++;
-                                  prev = tasks[i].level;
-                                }
-                                return counters.slice(0, task.level+1).join('.');
-                              })()}
+                              {generateWBSString(index)}
                             </div>
 
                             <div className="col task-col">
