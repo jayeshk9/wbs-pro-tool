@@ -5,7 +5,6 @@ import autoTable from 'jspdf-autotable';
 import './App.css';
 
 const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh", "Lokesh", "Jay"];
-const CONTRACTOR_OPTIONS = ["Rahees", "Basheer", "Vedprakash", "Raju C.", "Sawerlal", "Mohan", "Shabir", "Lala"];
 const STATUS_OPTIONS = ["-", "to be started", "in progress", "completed", "stuck"];
 
 function App() {
@@ -14,7 +13,7 @@ function App() {
     return saved ? JSON.parse(saved) : [
       { 
         id: 'initial-1', text: 'Project Start', level: 0, isCollapsed: false,
-        assignedTo: [], contractor: '', status: '-', 
+        assignedTo: [], status: '-', 
         startDate: '', days: '', endDate: '', remarks: '' 
       }
     ];
@@ -63,7 +62,6 @@ function App() {
         weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' 
     });
 
-    // Replicating Reference Header Style [cite: 1, 2, 3, 4]
     doc.setFontSize(16);
     doc.text("WBS-Project Report", 14, 15);
     doc.setFontSize(10);
@@ -77,7 +75,6 @@ function App() {
         wbsNum,
         indent + task.text,
         task.assignedTo.join(', ') || '-',
-        task.contractor || '-',
         task.status,
         task.endDate || '-',
         task.remarks || '-'
@@ -86,19 +83,18 @@ function App() {
 
     autoTable(doc, {
       startY: 35,
-      head: [['WBS', 'Task', 'Stakeholders', 'Owner', 'Status', 'Due', 'Notes']],
+      head: [['WBS', 'Task', 'Stakeholders', 'Status', 'Due', 'Notes']],
       body: tableData,
       theme: 'grid',
       headStyles: { fillGray: [240, 240, 240], textColor: [50, 50, 50], fontStyle: 'bold', fontSize: 9 },
       styles: { fontSize: 8, cellPadding: 3, valign: 'middle' },
       columnStyles: {
-        0: { cellWidth: 18 }, // WBS
-        1: { cellWidth: 70 }, // Task
-        2: { cellWidth: 40 }, // Stakeholders
-        3: { cellWidth: 30 }, // Owner
-        4: { cellWidth: 25 }, // Status
-        5: { cellWidth: 25 }, // Due
-        6: { cellWidth: 'auto' } // Notes
+        0: { cellWidth: 18 },
+        1: { cellWidth: 80 },
+        2: { cellWidth: 50 },
+        3: { cellWidth: 25 },
+        4: { cellWidth: 25 },
+        5: { cellWidth: 'auto' }
       }
     });
 
@@ -133,7 +129,7 @@ function App() {
 
     newTasks.splice(insertAt, 0, { 
       id: newId, text: '', level: levelToUse, isCollapsed: false,
-      assignedTo: [], contractor: '', status: '-', startDate: '', days: '', endDate: '', remarks: '' 
+      assignedTo: [], status: '-', startDate: '', days: '', endDate: '', remarks: '' 
     });
     setTasks(newTasks);
     setFocusId(newId);
@@ -205,7 +201,7 @@ function App() {
     <div className="App">
       <header className="header">
         <div className="header-top">
-          <h1>WBS Pro <small>4.8</small></h1>
+          <h1>WBS Pro <small>5.1</small></h1>
           <div className="bulk-actions">
             <button className="secondary-btn print-btn" onClick={exportToPDF}>Print PDF</button>
             <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
@@ -231,10 +227,9 @@ function App() {
               <div className="col drag-handle-placeholder"></div>
               <div className="col num-col">WBS</div>
               <div className="col task-col">TASK DESCRIPTION</div>
-              <div className="col assigned-col">ASSIGNED TO</div>
-              <div className="col contractor-col">CONTRACTOR</div>
+              <div className="col assigned-col">STAKEHOLDERS</div>
               <div className="col status-col">STATUS</div>
-              <div className="col date-col">START DATE</div>
+              <div className="col date-col">START</div>
               <div className="col day-col">DAYS</div>
               <div className="col date-col">END DATE</div>
               <div className="col remarks-col">REMARKS</div>
@@ -257,18 +252,18 @@ function App() {
                     return (
                       <Draggable key={task.id} draggableId={task.id} index={index}>
                         {(provided) => (
-                          <div ref={provided.innerRef} {...provided.draggableProps} onKeyDown={(e) => handleKeyDown(e, index)} className={`wbs-row ${task.isCollapsed ? 'collapsed-parent' : ''} ${isMenuOpen ? 'z-top' : ''}`}>
+                          <div ref={provided.innerRef} {...provided.draggableProps} onKeyDown={(e) => handleKeyDown(e, index)} className={`wbs-row level-${task.level} ${task.isCollapsed ? 'collapsed-parent' : ''} ${isMenuOpen ? 'z-top' : ''}`}>
                             <div {...provided.dragHandleProps} className="col drag-handle">⠿</div>
                             
                             <div className="col num-col">
-                              <button className={`collapse-toggle ${hasChildren ? '' : 'hidden'}`} onClick={() => toggleSelection(task.id, 'isCollapsed', !task.isCollapsed)}>
-                                {task.isCollapsed ? '▶' : '▼'}
-                              </button>
                               {generateWBSString(index)}
                             </div>
 
                             <div className="col task-col">
                               <div className="task-input-wrapper" style={{ paddingLeft: `${task.level * 24}px` }}>
+                                <button className={`collapse-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} onClick={() => toggleSelection(task.id, 'isCollapsed', !task.isCollapsed)}>
+                                  {task.isCollapsed ? '▶' : '▼'}
+                                </button>
                                 <input type="text" autoFocus={task.id === focusId} value={task.text} onFocus={() => setFocusId(task.id)} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => toggleSelection(task.id, 'text', e.target.value)} className="task-input-field" placeholder="Task name..." />
                               </div>
                             </div>
@@ -291,15 +286,6 @@ function App() {
                               </div>
                             </div>
 
-                            <div className="col contractor-col">
-                              <div className="cell-input">
-                                <select value={task.contractor} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => toggleSelection(task.id, 'contractor', e.target.value)} className="select-clean">
-                                  <option value="">-</option>
-                                  {CONTRACTOR_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                                </select>
-                              </div>
-                            </div>
-
                             <div className="col status-col">
                               <div className="cell-input">
                                 <select value={task.status} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => toggleSelection(task.id, 'status', e.target.value)} className={`select-clean status-${task.status.replace(/\s+/g, '-')}`}>
@@ -316,7 +302,7 @@ function App() {
 
                             <div className="col day-col">
                               <div className="cell-input">
-                                <input type="number" value={task.days} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'days', e.target.value) : t))} className="clean-input center-text" placeholder="0" />
+                                <input type="number" value={task.days} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'days', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" />
                               </div>
                             </div>
 
@@ -332,7 +318,7 @@ function App() {
                                 onKeyDown={(e) => handleKeyDown(e, index)}
                                 onInput={(e) => handleRemarksInput(e, task.id)}
                                 className="remarks-textarea" 
-                                placeholder="..."
+                                placeholder="Notes..."
                                 rows="1"
                                />
                             </div>
