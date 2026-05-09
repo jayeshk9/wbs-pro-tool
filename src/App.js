@@ -4,7 +4,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import './App.css';
 
-const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh", "Lokesh", "Jay"];
+const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh", "Lokesh", "Jay", "Mahender"];
 const STATUS_OPTIONS = ["-", "to be started", "in progress", "completed", "stuck"];
 
 function App() {
@@ -201,7 +201,7 @@ function App() {
     <div className="App">
       <header className="header">
         <div className="header-top">
-          <h1>WBS Pro <small>5.1</small></h1>
+          <h1>WBS Pro <small>5.2</small></h1>
           <div className="bulk-actions">
             <button className="secondary-btn print-btn" onClick={exportToPDF}>Print PDF</button>
             <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
