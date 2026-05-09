@@ -83,7 +83,7 @@ function App() {
 
     autoTable(doc, {
       startY: 35,
-      head: [['WBS', 'Task', 'Stakeholders', 'Status', 'Due', 'Notes']],
+      head: [['WBS', 'Task', 'Supervisor', 'Status', 'Due', 'Notes']],
       body: tableData,
       theme: 'grid',
       headStyles: { fillGray: [240, 240, 240], textColor: [50, 50, 50], fontStyle: 'bold', fontSize: 9 },
@@ -227,7 +227,7 @@ function App() {
               <div className="col drag-handle-placeholder"></div>
               <div className="col num-col">WBS</div>
               <div className="col task-col">TASK DESCRIPTION</div>
-              <div className="col assigned-col">STAKEHOLDERS</div>
+              <div className="col assigned-col">SUPERVISOR</div>
               <div className="col status-col">STATUS</div>
               <div className="col date-col">START</div>
               <div className="col day-col">DAYS</div>
