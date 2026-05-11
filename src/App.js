@@ -19,7 +19,6 @@ function App() {
     ];
   });
 
-  // Today/Report date selector state
   const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
   const [focusId, setFocusId] = useState(null);
   const [activeMenu, setActiveMenu] = useState(null);
@@ -66,10 +65,10 @@ function App() {
 
   const getStatusColor = (status) => {
     switch (status) {
-      case 'to be started': return { fill: [255, 237, 213], text: [194, 65, 12] }; // Orange
-      case 'in progress': return { fill: [239, 246, 255], text: [29, 78, 216] }; // Blue
-      case 'completed': return { fill: [240, 253, 244], text: [21, 128, 61] }; // Green
-      case 'stuck': return { fill: [254, 226, 226], text: [185, 28, 28] }; // Red
+      case 'to be started': return { fill: [255, 219, 171], text: [154, 52, 18] }; 
+      case 'in progress': return { fill: [191, 219, 254], text: [30, 64, 175] }; 
+      case 'completed': return { fill: [187, 247, 208], text: [22, 101, 52] }; 
+      case 'stuck': return { fill: [254, 202, 202], text: [153, 27, 27] }; 
       default: return null;
     }
   };
@@ -120,14 +119,12 @@ function App() {
         const task = tasks[taskIdx];
         
         if (data.section === 'body') {
-          // Row Background Colors based on Level
           if (task.level === 0) data.cell.styles.fillColor = [235, 248, 255];
           else if (task.level === 1) data.cell.styles.fillColor = [255, 255, 255];
           else if (task.level === 2) data.cell.styles.fillColor = [248, 250, 252];
           else if (task.level === 3) data.cell.styles.fillColor = [241, 245, 249];
           else if (task.level >= 4) data.cell.styles.fillColor = [226, 232, 240];
           
-          // Status Coloring
           if (data.column.index === 3) {
             const colors = getStatusColor(task.status);
             if (colors) {
@@ -136,12 +133,11 @@ function App() {
             }
           }
 
-          // Date Highlight (Red)
           const isStartRed = task.startDate === reportDate;
           const isEndRed = task.endDate === reportDate;
           if ((data.column.index === 4 && isStartRed) || (data.column.index === 6 && isEndRed)) {
-            data.cell.styles.fillColor = [254, 226, 226];
-            data.cell.styles.textColor = [185, 28, 28];
+            data.cell.styles.fillColor = [254, 202, 202];
+            data.cell.styles.textColor = [153, 27, 27];
           }
         }
       }
@@ -326,7 +322,7 @@ function App() {
 
                             <div className="col assigned-col">
                               <div className="cell-input popover-trigger">
-                                <div className="names-display">{task.assignedTo?.join(', ') || '-'}</div>
+                                <div className="names-display">{task.assignedTo?.join('\n') || '-'}</div>
                                 <button className="add-icon" onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.id === task.id && activeMenu?.type === 'assign' ? null : {id: task.id, type: 'assign'}); }}>+</button>
                                 {activeMenu?.id === task.id && activeMenu?.type === 'assign' && (
                                   <div className="popover-menu" onClick={e => e.stopPropagation()}>
