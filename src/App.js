@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -6,6 +6,7 @@ import './App.css';
 
 const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh", "Lokesh", "Jay", "Mahender"];
 const STATUS_OPTIONS = ["-", "to be started", "in progress", "completed", "stuck"];
+const LEVEL_OPTIONS = [0, 1, 2, 3, 4, 5];
 
 function App() {
   const [tasks, setTasks] = useState(() => {
@@ -22,6 +23,12 @@ function App() {
   const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
   const [focusId, setFocusId] = useState(null);
   const [activeMenu, setActiveMenu] = useState(null);
+
+  // Filter States
+  const [filterSupervisors, setFilterSupervisors] = useState([]);
+  const [filterStatuses, setFilterStatuses] = useState([]);
+  const [filterLevels, setFilterLevels] = useState([]);
+  const [filterDateRange, setFilterDateRange] = useState({ start: '', end: '' });
 
   useEffect(() => {
     localStorage.setItem('wbs-v16-data', JSON.stringify(tasks));
@@ -73,6 +80,31 @@ function App() {
     }
   };
 
+  // Filter Logic
+  const filteredTasks = useMemo(() => {
+    return tasks.map((task, originalIndex) => ({ ...task, originalIndex })).filter(task => {
+      const matchSup = filterSupervisors.length === 0 || task.assignedTo.some(s => filterSupervisors.includes(s));
+      const matchStatus = filterStatuses.length === 0 || filterStatuses.includes(task.status);
+      const matchLevel = filterLevels.length === 0 || filterLevels.includes(task.level);
+      
+      let matchDate = true;
+      if (filterDateRange.start && filterDateRange.end) {
+        matchDate = task.endDate ? (task.endDate >= filterDateRange.start && task.endDate <= filterDateRange.end) : false;
+      }
+
+      return matchSup && matchStatus && matchLevel && matchDate;
+    });
+  }, [tasks, filterSupervisors, filterStatuses, filterLevels, filterDateRange]);
+
+  const isFilterActive = filterSupervisors.length > 0 || filterStatuses.length > 0 || filterLevels.length > 0 || (filterDateRange.start && filterDateRange.end);
+
+  const clearFilters = () => {
+    setFilterSupervisors([]);
+    setFilterStatuses([]);
+    setFilterLevels([]);
+    setFilterDateRange({ start: '', end: '' });
+  };
+
   const exportToPDF = () => {
     const doc = new jsPDF('l', 'mm', 'a4');
     const todayStr = formatDateShort(reportDate);
@@ -82,8 +114,20 @@ function App() {
     doc.setFontSize(10);
     doc.text(`Date: ${todayStr}`, 14, 22);
 
-    const tableData = tasks.map((task, index) => {
-      const wbsNum = generateWBSString(index);
+    let yOffset = 28;
+    if (isFilterActive) {
+      doc.setFontSize(8);
+      let filterText = "Active Filters: ";
+      if (filterSupervisors.length) filterText += `Supervisors: ${filterSupervisors.join(', ')} | `;
+      if (filterStatuses.length) filterText += `Statuses: ${filterStatuses.join(', ')} | `;
+      if (filterLevels.length) filterText += `Levels: ${filterLevels.join(', ')} | `;
+      if (filterDateRange.start) filterText += `Ends Between: ${formatDateShort(filterDateRange.start)} - ${formatDateShort(filterDateRange.end)}`;
+      doc.text(filterText, 14, yOffset);
+      yOffset += 6;
+    }
+
+    const tableData = filteredTasks.map((task) => {
+      const wbsNum = generateWBSString(task.originalIndex);
       const indent = "    ".repeat(task.level); 
       return [
         wbsNum,
@@ -98,7 +142,7 @@ function App() {
     });
 
     autoTable(doc, {
-      startY: 30,
+      startY: yOffset,
       head: [['WBS', 'TASK DESCRIPTION', 'SUPERVISOR', 'STATUS', 'START', 'DAYS', 'END DATE', 'REMARKS']],
       body: tableData,
       theme: 'grid',
@@ -115,10 +159,8 @@ function App() {
         7: { cellWidth: 'auto' }
       },
       didParseCell: (data) => {
-        const taskIdx = data.row.index;
-        const task = tasks[taskIdx];
-        
-        if (data.section === 'body') {
+        const task = filteredTasks[data.row.index];
+        if (data.section === 'body' && task) {
           if (task.level === 0) data.cell.styles.fillColor = [235, 248, 255];
           else if (task.level === 1) data.cell.styles.fillColor = [255, 255, 255];
           else if (task.level === 2) data.cell.styles.fillColor = [248, 250, 252];
@@ -260,6 +302,77 @@ function App() {
             </div>
           </div>
         </div>
+
+        {/* Filter Bar */}
+        <div className="filter-bar">
+          <div className="filter-group">
+            <span className="filter-label">Filters:</span>
+            
+            {/* Supervisor Filter */}
+            <div className="filter-item popover-trigger">
+              <button className={`filter-btn ${filterSupervisors.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-sup' ? null : {type: 'filter-sup'}); }}>
+                Supervisors {filterSupervisors.length > 0 && `(${filterSupervisors.length})`}
+              </button>
+              {activeMenu?.type === 'filter-sup' && (
+                <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
+                  <div className="menu-scroll">
+                    {ASSIGNED_OPTIONS.map(opt => (
+                      <label key={opt} className="menu-item">
+                        <input type="checkbox" checked={filterSupervisors.includes(opt)} onChange={() => setFilterSupervisors(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> {opt}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Status Filter */}
+            <div className="filter-item popover-trigger">
+              <button className={`filter-btn ${filterStatuses.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-status' ? null : {type: 'filter-status'}); }}>
+                Status {filterStatuses.length > 0 && `(${filterStatuses.length})`}
+              </button>
+              {activeMenu?.type === 'filter-status' && (
+                <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
+                  <div className="menu-scroll">
+                    {STATUS_OPTIONS.map(opt => (
+                      <label key={opt} className="menu-item">
+                        <input type="checkbox" checked={filterStatuses.includes(opt)} onChange={() => setFilterStatuses(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> {opt}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Level Filter */}
+            <div className="filter-item popover-trigger">
+              <button className={`filter-btn ${filterLevels.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-level' ? null : {type: 'filter-level'}); }}>
+                Levels {filterLevels.length > 0 && `(${filterLevels.length})`}
+              </button>
+              {activeMenu?.type === 'filter-level' && (
+                <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
+                  <div className="menu-scroll">
+                    {LEVEL_OPTIONS.map(opt => (
+                      <label key={opt} className="menu-item">
+                        <input type="checkbox" checked={filterLevels.includes(opt)} onChange={() => setFilterLevels(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> Level {opt}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Date Range Filter */}
+            <div className="filter-item date-range-group">
+              <label>Ends Between:</label>
+              <input type="date" value={filterDateRange.start} onChange={(e) => setFilterDateRange({...filterDateRange, start: e.target.value})} className="filter-date-input" />
+              <span>to</span>
+              <input type="date" value={filterDateRange.end} onChange={(e) => setFilterDateRange({...filterDateRange, end: e.target.value})} className="filter-date-input" />
+            </div>
+
+            {isFilterActive && <button className="clear-filters-btn" onClick={clearFilters}>Clear Filters ×</button>}
+          </div>
+        </div>
       </header>
 
       <div className="wbs-container">
@@ -267,6 +380,9 @@ function App() {
           if (!result.destination) return;
           const sIdx = result.source.index;
           const dIdx = result.destination.index;
+          // Drag and drop usually works on the full list. In filtered view, DND is typically disabled to prevent logical errors.
+          if (isFilterActive) return; 
+
           const blockSize = (tasks[sIdx].isCollapsed ? getSubtaskRange(sIdx) : sIdx) - sIdx + 1;
           const copy = [...tasks];
           const block = copy.splice(sIdx, blockSize);
@@ -290,25 +406,30 @@ function App() {
             <Droppable droppableId="wbs-list">
               {(provided) => (
                 <div {...provided.droppableProps} ref={provided.innerRef}>
-                  {tasks.map((task, index) => {
-                    let visible = true;
-                    for (let i = 0; i < index; i++) {
-                      if (tasks[i].isCollapsed && index > i && index <= getSubtaskRange(i)) visible = false;
+                  {filteredTasks.map((task, fIndex) => {
+                    const originalIndex = task.originalIndex;
+                    
+                    // Collapsed Visibility Logic (Only if NO filters are active)
+                    if (!isFilterActive) {
+                      let visible = true;
+                      for (let i = 0; i < originalIndex; i++) {
+                        if (tasks[i].isCollapsed && originalIndex > i && originalIndex <= getSubtaskRange(i)) visible = false;
+                      }
+                      if (!visible) return null;
                     }
-                    if (!visible) return null;
 
-                    const hasChildren = index < tasks.length - 1 && tasks[index + 1].level > task.level;
+                    const hasChildren = originalIndex < tasks.length - 1 && tasks[originalIndex + 1].level > task.level;
                     const isMenuOpen = activeMenu?.id === task.id;
                     const showBlueAccent = task.level === 0 || (hasChildren && task.isCollapsed);
 
                     return (
-                      <Draggable key={task.id} draggableId={task.id} index={index}>
+                      <Draggable key={task.id} draggableId={task.id} index={fIndex} isDragDisabled={isFilterActive}>
                         {(provided) => (
-                          <div ref={provided.innerRef} {...provided.draggableProps} onKeyDown={(e) => handleKeyDown(e, index)} className={`wbs-row level-${task.level} ${showBlueAccent ? 'blue-accent' : ''} ${isMenuOpen ? 'z-top' : ''}`}>
+                          <div ref={provided.innerRef} {...provided.draggableProps} onKeyDown={(e) => handleKeyDown(e, originalIndex)} className={`wbs-row level-${task.level} ${showBlueAccent ? 'blue-accent' : ''} ${isMenuOpen ? 'z-top' : ''}`}>
                             <div {...provided.dragHandleProps} className="col drag-handle">⠿</div>
                             
                             <div className="col num-col">
-                              {generateWBSString(index)}
+                              {generateWBSString(originalIndex)}
                             </div>
 
                             <div className="col task-col">
@@ -316,7 +437,7 @@ function App() {
                                 <button className={`collapse-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} onClick={() => toggleSelection(task.id, 'isCollapsed', !task.isCollapsed)}>
                                   {task.isCollapsed ? '▶' : '▼'}
                                 </button>
-                                <input type="text" autoFocus={task.id === focusId} value={task.text} onFocus={() => setFocusId(task.id)} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => toggleSelection(task.id, 'text', e.target.value)} className="task-input-field" placeholder="Task name..." />
+                                <input type="text" autoFocus={task.id === focusId} value={task.text} onFocus={() => setFocusId(task.id)} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => toggleSelection(task.id, 'text', e.target.value)} className="task-input-field" placeholder="Task name..." />
                               </div>
                             </div>
 
@@ -340,7 +461,7 @@ function App() {
 
                             <div className="col status-col">
                               <div className={`cell-input status-bg-${task.status.replace(/\s+/g, '-')}`}>
-                                <select value={task.status} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => toggleSelection(task.id, 'status', e.target.value)} className={`select-clean status-text-${task.status.replace(/\s+/g, '-')}`}>
+                                <select value={task.status} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => toggleSelection(task.id, 'status', e.target.value)} className={`select-clean status-text-${task.status.replace(/\s+/g, '-')}`}>
                                   {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                                 </select>
                               </div>
@@ -348,26 +469,26 @@ function App() {
 
                             <div className="col date-col">
                               <div className={`cell-input ${task.startDate === reportDate ? 'date-highlight-red' : ''}`}>
-                                <input type="date" value={task.startDate} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'startDate', e.target.value) : t))} className="clean-input date-input" />
+                                <input type="date" value={task.startDate} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'startDate', e.target.value) : t))} className="clean-input date-input" />
                               </div>
                             </div>
 
                             <div className="col day-col">
                               <div className="cell-input">
-                                <input type="number" value={task.days} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'days', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" />
+                                <input type="number" value={task.days} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'days', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" />
                               </div>
                             </div>
 
                             <div className="col date-col">
                               <div className={`cell-input ${task.endDate === reportDate ? 'date-highlight-red' : ''}`}>
-                                <input type="date" value={task.endDate} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'endDate', e.target.value) : t))} className="clean-input date-input" />
+                                <input type="date" value={task.endDate} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'endDate', e.target.value) : t))} className="clean-input date-input" />
                               </div>
                             </div>
 
                             <div className="col remarks-col">
                                <textarea 
                                 value={task.remarks} 
-                                onKeyDown={(e) => handleKeyDown(e, index)}
+                                onKeyDown={(e) => handleKeyDown(e, originalIndex)}
                                 onInput={(e) => handleRemarksInput(e, task.id)}
                                 className="remarks-textarea" 
                                 placeholder="Notes..."
@@ -376,7 +497,7 @@ function App() {
                             </div>
 
                             <div className="col action-col">
-                               <button className="row-delete-btn" title="Ctrl + Shift + D" onClick={() => deleteTask(index)}>×</button>
+                               <button className="row-delete-btn" title="Ctrl + Shift + D" onClick={() => deleteTask(originalIndex)}>×</button>
                             </div>
                           </div>
                         )}
