@@ -19,6 +19,8 @@ function App() {
     ];
   });
 
+  // Today/Report date selector state
+  const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
   const [focusId, setFocusId] = useState(null);
   const [activeMenu, setActiveMenu] = useState(null);
 
@@ -56,49 +58,96 @@ function App() {
     return counters.slice(0, tasks[index].level + 1).join('.');
   };
 
+  const formatDateShort = (dateStr) => {
+    if (!dateStr) return '-';
+    const [y, m, d] = dateStr.split('-');
+    return `${d}/${m}/${y.slice(-2)}`;
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'to be started': return { fill: [255, 237, 213], text: [194, 65, 12] }; // Orange
+      case 'in progress': return { fill: [239, 246, 255], text: [29, 78, 216] }; // Blue
+      case 'completed': return { fill: [240, 253, 244], text: [21, 128, 61] }; // Green
+      case 'stuck': return { fill: [254, 226, 226], text: [185, 28, 28] }; // Red
+      default: return null;
+    }
+  };
+
   const exportToPDF = () => {
     const doc = new jsPDF('l', 'mm', 'a4');
-    const today = new Date().toLocaleDateString('en-GB', { 
-        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' 
-    });
+    const todayStr = formatDateShort(reportDate);
 
     doc.setFontSize(16);
-    doc.text("WBS-Project Report", 14, 15);
+    doc.text("Ajmer Estate Project Report", 14, 15);
     doc.setFontSize(10);
-    doc.text("Work Breakdown Structure", 14, 22);
-    doc.text(today, 14, 28);
+    doc.text(`Date: ${todayStr}`, 14, 22);
 
     const tableData = tasks.map((task, index) => {
       const wbsNum = generateWBSString(index);
-      const indent = "  ".repeat(task.level);
+      const indent = "    ".repeat(task.level); 
       return [
         wbsNum,
         indent + task.text,
         task.assignedTo.join(', ') || '-',
         task.status,
-        task.endDate || '-',
+        formatDateShort(task.startDate),
+        task.days || '-',
+        formatDateShort(task.endDate),
         task.remarks || '-'
       ];
     });
 
     autoTable(doc, {
-      startY: 35,
-      head: [['WBS', 'Task', 'Supervisor', 'Status', 'Due', 'Notes']],
+      startY: 30,
+      head: [['WBS', 'TASK DESCRIPTION', 'SUPERVISOR', 'STATUS', 'START', 'DAYS', 'END DATE', 'REMARKS']],
       body: tableData,
       theme: 'grid',
-      headStyles: { fillGray: [240, 240, 240], textColor: [50, 50, 50], fontStyle: 'bold', fontSize: 9 },
-      styles: { fontSize: 8, cellPadding: 3, valign: 'middle' },
+      headStyles: { fillGray: [240, 240, 240], textColor: [50, 50, 50], fontStyle: 'bold', fontSize: 8 },
+      styles: { fontSize: 7, cellPadding: 2, valign: 'middle' },
       columnStyles: {
-        0: { cellWidth: 18 },
-        1: { cellWidth: 80 },
-        2: { cellWidth: 50 },
+        0: { cellWidth: 15 },
+        1: { cellWidth: 65 },
+        2: { cellWidth: 40 },
         3: { cellWidth: 25 },
-        4: { cellWidth: 25 },
-        5: { cellWidth: 'auto' }
+        4: { cellWidth: 20 },
+        5: { cellWidth: 12 },
+        6: { cellWidth: 20 },
+        7: { cellWidth: 'auto' }
+      },
+      didParseCell: (data) => {
+        const taskIdx = data.row.index;
+        const task = tasks[taskIdx];
+        
+        if (data.section === 'body') {
+          // Row Background Colors based on Level
+          if (task.level === 0) data.cell.styles.fillColor = [235, 248, 255];
+          else if (task.level === 1) data.cell.styles.fillColor = [255, 255, 255];
+          else if (task.level === 2) data.cell.styles.fillColor = [248, 250, 252];
+          else if (task.level === 3) data.cell.styles.fillColor = [241, 245, 249];
+          else if (task.level >= 4) data.cell.styles.fillColor = [226, 232, 240];
+          
+          // Status Coloring
+          if (data.column.index === 3) {
+            const colors = getStatusColor(task.status);
+            if (colors) {
+              data.cell.styles.fillColor = colors.fill;
+              data.cell.styles.textColor = colors.text;
+            }
+          }
+
+          // Date Highlight (Red)
+          const isStartRed = task.startDate === reportDate;
+          const isEndRed = task.endDate === reportDate;
+          if ((data.column.index === 4 && isStartRed) || (data.column.index === 6 && isEndRed)) {
+            data.cell.styles.fillColor = [254, 226, 226];
+            data.cell.styles.textColor = [185, 28, 28];
+          }
+        }
       }
     });
 
-    doc.save(`WBS_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+    doc.save(`WBS_Report_${reportDate}.pdf`);
   };
 
   const updateDates = (task, field, value) => {
@@ -202,11 +251,17 @@ function App() {
       <header className="header">
         <div className="header-top">
           <h1>WBS Pro <small>5.2</small></h1>
-          <div className="bulk-actions">
-            <button className="secondary-btn print-btn" onClick={exportToPDF}>Print PDF</button>
-            <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
-            <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
-            <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && setTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-' }])}>Clear All</button>
+          <div className="header-controls">
+            <div className="date-selector">
+              <label>Report Date:</label>
+              <input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} />
+            </div>
+            <div className="bulk-actions">
+              <button className="secondary-btn print-btn" onClick={exportToPDF}>Print PDF</button>
+              <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
+              <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
+              <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && setTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-' }])}>Clear All</button>
+            </div>
           </div>
         </div>
       </header>
@@ -248,11 +303,12 @@ function App() {
 
                     const hasChildren = index < tasks.length - 1 && tasks[index + 1].level > task.level;
                     const isMenuOpen = activeMenu?.id === task.id;
+                    const showBlueAccent = task.level === 0 || (hasChildren && task.isCollapsed);
 
                     return (
                       <Draggable key={task.id} draggableId={task.id} index={index}>
                         {(provided) => (
-                          <div ref={provided.innerRef} {...provided.draggableProps} onKeyDown={(e) => handleKeyDown(e, index)} className={`wbs-row level-${task.level} ${task.isCollapsed ? 'collapsed-parent' : ''} ${isMenuOpen ? 'z-top' : ''}`}>
+                          <div ref={provided.innerRef} {...provided.draggableProps} onKeyDown={(e) => handleKeyDown(e, index)} className={`wbs-row level-${task.level} ${showBlueAccent ? 'blue-accent' : ''} ${isMenuOpen ? 'z-top' : ''}`}>
                             <div {...provided.dragHandleProps} className="col drag-handle">⠿</div>
                             
                             <div className="col num-col">
@@ -287,15 +343,15 @@ function App() {
                             </div>
 
                             <div className="col status-col">
-                              <div className="cell-input">
-                                <select value={task.status} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => toggleSelection(task.id, 'status', e.target.value)} className={`select-clean status-${task.status.replace(/\s+/g, '-')}`}>
+                              <div className={`cell-input status-bg-${task.status.replace(/\s+/g, '-')}`}>
+                                <select value={task.status} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => toggleSelection(task.id, 'status', e.target.value)} className={`select-clean status-text-${task.status.replace(/\s+/g, '-')}`}>
                                   {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                                 </select>
                               </div>
                             </div>
 
                             <div className="col date-col">
-                              <div className="cell-input">
+                              <div className={`cell-input ${task.startDate === reportDate ? 'date-highlight-red' : ''}`}>
                                 <input type="date" value={task.startDate} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'startDate', e.target.value) : t))} className="clean-input date-input" />
                               </div>
                             </div>
@@ -307,7 +363,7 @@ function App() {
                             </div>
 
                             <div className="col date-col">
-                              <div className="cell-input">
+                              <div className={`cell-input ${task.endDate === reportDate ? 'date-highlight-red' : ''}`}>
                                 <input type="date" value={task.endDate} onKeyDown={(e) => handleKeyDown(e, index)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'endDate', e.target.value) : t))} className="clean-input date-input" />
                               </div>
                             </div>

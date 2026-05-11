@@ -11,8 +11,17 @@
   --text-size: 13px;
   --text-color: #374151;
   --placeholder-color: #9ca3af;
-  /* Uniform border width to ensure vertical alignment */
   --accent-width: 5px;
+
+  /* Status & Date Colors */
+  --red-bg: #fee2e2;
+  --red-text: #b91c1c;
+  --orange-bg: #ffedd5;
+  --orange-text: #c2410c;
+  --blue-bg: #eff6ff;
+  --blue-text: #1d4ed8;
+  --green-bg: #f0fdf4;
+  --green-text: #15803d;
 }
 
 .App { padding: 30px; background: #f3f4f6; min-height: 100vh; font-family: var(--font-main); }
@@ -21,6 +30,10 @@
 .header-top { display: flex; justify-content: space-between; align-items: center; }
 .header-top h1 { font-size: 24px; color: #111827; }
 .header-top h1 small { font-size: 12px; background: var(--primary); color: white; padding: 2px 6px; border-radius: 4px; margin-left: 10px; }
+
+.header-controls { display: flex; align-items: center; gap: 20px; }
+.date-selector { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; color: #4b5563; }
+.date-selector input { padding: 5px; border-radius: 4px; border: 1px solid var(--border); font-family: inherit; }
 
 .bulk-actions { display: flex; gap: 8px; }
 
@@ -45,21 +58,19 @@
   min-height: var(--row-height); 
   position: relative;
   width: 100%;
-  /* Fixed left border space for ALL rows to align grid lines */
   border-left: var(--accent-width) solid transparent;
 }
 .wbs-row:hover { filter: brightness(0.98); }
 .z-top { z-index: 100 !important; }
 
-/* Level Colors: Dark to Light Grey (Except Level 0) */
-.wbs-row.level-0 { background-color: #ebf8ff; border-left-color: #2563eb; }
-.wbs-row.level-1 { background-color: #cbd5e0; }
-.wbs-row.level-2 { background-color: #e2e8f0; }
+/* Level Colors: Level 1 is white, then gets darker */
+.wbs-row.level-0 { background-color: #ebf8ff; }
+.wbs-row.level-1 { background-color: #ffffff; }
+.wbs-row.level-2 { background-color: #f8fafc; }
 .wbs-row.level-3 { background-color: #f1f5f9; }
-.wbs-row.level-4, .wbs-row.level-5 { background-color: #f8fafc; }
+.wbs-row.level-4, .wbs-row.level-5 { background-color: #e2e8f0; }
 
-/* Alignment: Highlight collapsed parents with a darker tint and the blue accent */
-.wbs-row.collapsed-parent { border-left-color: #2563eb !important; filter: brightness(0.95); }
+.wbs-row.blue-accent { border-left-color: #2563eb !important; }
 
 .col { 
   padding: 0 12px; 
@@ -82,7 +93,6 @@
 
 .header-row .col { align-items: center; padding-top: 0; height: 100%; }
 
-/* Fixed Column Widths for Screen Fit */
 .drag-handle-placeholder, .drag-handle { width: 40px; justify-content: center; }
 .drag-handle { padding-top: 18px; color: #94a3b8; font-size: 18px; cursor: grab; }
 
@@ -94,23 +104,6 @@
 .day-col { width: 70px; } 
 .remarks-col { flex: 1; min-width: 250px; border-right: 1px solid var(--grid-line); }
 .action-col { width: 45px; justify-content: center; border-right: none; align-items: center; padding-top: 0; flex-shrink: 0; }
-
-/* Input Standardization */
-.task-input-field, 
-.clean-input, 
-.select-clean, 
-.remarks-textarea,
-.names-display {
-  font-family: var(--font-main);
-  font-size: var(--text-size);
-  color: var(--text-color);
-}
-
-.task-input-field::placeholder,
-.remarks-textarea::placeholder,
-.day-input-field::placeholder {
-  color: var(--placeholder-color);
-}
 
 .task-input-wrapper { width: 100%; padding-top: var(--input-offset); display: flex; align-items: center; }
 .task-input-field { flex: 1; border: none; padding: 12px 0; background: transparent; font-weight: 500; }
@@ -129,6 +122,23 @@
   margin-bottom: 12px;
 }
 
+/* Status Color Classes */
+.status-bg-to-be-started { background-color: var(--orange-bg) !important; border-color: #fed7aa; }
+.status-text-to-be-started { color: var(--orange-text) !important; font-weight: 600; }
+
+.status-bg-in-progress { background-color: var(--blue-bg) !important; border-color: #bfdbfe; }
+.status-text-in-progress { color: var(--blue-text) !important; font-weight: 600; }
+
+.status-bg-completed { background-color: var(--green-bg) !important; border-color: #bbf7d0; }
+.status-text-completed { color: var(--green-text) !important; font-weight: 600; }
+
+.status-bg-stuck { background-color: var(--red-bg) !important; border-color: #fecaca; }
+.status-text-stuck { color: var(--red-text) !important; font-weight: 600; }
+
+/* Date Highlight */
+.date-highlight-red { background-color: var(--red-bg) !important; border-color: #fecaca; }
+.date-highlight-red input { color: var(--red-text) !important; font-weight: 600; }
+
 .clean-input { width: 100%; border: none; background: transparent; height: 100%; padding: 0 8px; outline: none; }
 .day-input-field { text-align: center; padding: 0; }
 .date-input { font-family: monospace; font-size: 11px; }
@@ -145,7 +155,7 @@
 }
 .collapse-toggle.hidden { visibility: hidden; }
 
-/* Arrow Colors */
+/* Restored Arrow Colors per Level */
 .arrow-level-0 { color: #2563eb; }
 .arrow-level-1 { color: #d97706; }
 .arrow-level-2 { color: #059669; }
