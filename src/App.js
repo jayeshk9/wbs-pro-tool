@@ -137,17 +137,17 @@ function App() {
       // Requirement 2 & 3: Clean dates and days inside single stacked lines
       let startStr = formatDateShort(task.startDate);
       if (task.origStartDate && task.origStartDate !== task.startDate) {
-        startStr += `\n(${formatDateShort(task.origStartDate)})`;
+        startStr += `\n${formatDateShort(task.origStartDate)}`;
       }
 
       let daysStr = task.days || '-';
       if (task.origDays && String(task.origDays) !== String(task.days)) {
-        daysStr += `\n(${task.origDays})`;
+        daysStr += `\n${task.origDays}`;
       }
 
       let endStr = formatDateShort(task.endDate);
       if (task.origEndDate && task.origEndDate !== task.endDate) {
-        endStr += `\n(${formatDateShort(task.origEndDate)})`;
+        endStr += `\n${formatDateShort(task.origEndDate)}`;
       }
 
       const remarksText = capitalizeFirst(task.remarks) || '-';
@@ -219,6 +219,84 @@ function App() {
             } else if (task.status === 'in progress') {
               data.cell.styles.fontStyle = 'bold';
             }
+          }
+        }
+      },
+      willDrawCell: (data) => {
+        if (data.section === 'body') {
+          const taskIdx = data.row.index;
+          const task = tasks[taskIdx];
+          const colIdx = data.column.index;
+          
+          let hasDiff = false;
+          if (colIdx === 4 && task.origStartDate && task.origStartDate !== task.startDate) hasDiff = true;
+          if (colIdx === 5 && task.origDays && String(task.origDays) !== String(task.days)) hasDiff = true;
+          if (colIdx === 6 && task.origEndDate && task.origEndDate !== task.endDate) hasDiff = true;
+          
+          if (hasDiff) {
+            // Prevent autotable from running its default text rendering pass
+            data.cell.text = ['', ''];
+          }
+        }
+      },
+      didDrawCell: (data) => {
+        if (data.section === 'body') {
+          const taskIdx = data.row.index;
+          const task = tasks[taskIdx];
+          const colIdx = data.column.index;
+          
+          let hasDiff = false;
+          let line1 = '';
+          let line2 = '';
+          
+          if (colIdx === 4 && task.origStartDate && task.origStartDate !== task.startDate) {
+            hasDiff = true;
+            line1 = formatDateShort(task.startDate);
+            line2 = formatDateShort(task.origStartDate);
+          } else if (colIdx === 5 && task.origDays && String(task.origDays) !== String(task.days)) {
+            hasDiff = true;
+            line1 = task.days || '-';
+            line2 = String(task.origDays);
+          } else if (colIdx === 6 && task.origEndDate && task.origEndDate !== task.endDate) {
+            hasDiff = true;
+            line1 = formatDateShort(task.endDate);
+            line2 = formatDateShort(task.origEndDate);
+          }
+          
+          if (hasDiff) {
+            const isStartHighlight = task.startDate === reportDate;
+            const isEndHighlight = task.endDate === reportDate;
+            const isHighlighted = (colIdx === 4 && isStartHighlight) || (colIdx === 6 && isEndHighlight);
+            
+            // 1. Draw horizontal splitting line
+            if (isHighlighted) {
+              doc.setDrawColor(255, 255, 255);
+            } else {
+              doc.setDrawColor(0, 0, 0);
+            }
+            doc.setLineWidth(0.15);
+            const midY = data.cell.y + (data.cell.height / 2);
+            doc.line(data.cell.x, midY, data.cell.x + data.cell.width, midY);
+            
+            // 2. Set styles matching autotable's rules for this cell
+            doc.setFontSize(data.cell.styles.fontSize || 7);
+            const fontStyle = data.cell.styles.fontStyle || 'normal';
+            doc.setFont('helvetica', fontStyle);
+            
+            const textColor = data.cell.styles.textColor;
+            if (Array.isArray(textColor)) {
+              doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+            } else {
+              doc.setTextColor(0, 0, 0);
+            }
+            
+            // 3. Compute target coordinates for perfectly vertically centered half-cell lines
+            const centerX = data.cell.x + data.cell.width / 2;
+            const centerY1 = data.cell.y + (data.cell.height / 4);
+            const centerY2 = data.cell.y + (3 * data.cell.height / 4);
+            
+            doc.text(line1, centerX, centerY1, { align: 'center', baseline: 'middle' });
+            doc.text(line2, centerX, centerY2, { align: 'center', baseline: 'middle' });
           }
         }
       }
