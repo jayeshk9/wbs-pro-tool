@@ -4,7 +4,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import './App.css';
 
-const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh", "Lokesh", "Jay", "Mahender"];
+const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh C.", "Lokesh", "Jay", "Mahender","Anil"];
 const STATUS_OPTIONS = ["-", "to be started", "in progress", "completed", "stuck"];
 const LEVEL_OPTIONS = [0, 1, 2, 3, 4, 5];
 
@@ -114,72 +114,96 @@ function App() {
     doc.setFontSize(10);
     doc.text(`Date: ${todayStr}`, 14, 22);
 
-    let yOffset = 28;
-    if (isFilterActive) {
-      doc.setFontSize(8);
-      let filterText = "Active Filters: ";
-      if (filterSupervisors.length) filterText += `Supervisors: ${filterSupervisors.join(', ')} | `;
-      if (filterStatuses.length) filterText += `Statuses: ${filterStatuses.join(', ')} | `;
-      if (filterLevels.length) filterText += `Levels: ${filterLevels.join(', ')} | `;
-      if (filterDateRange.start) filterText += `Ends Between: ${formatDateShort(filterDateRange.start)} - ${formatDateShort(filterDateRange.end)}`;
-      doc.text(filterText, 14, yOffset);
-      yOffset += 6;
-    }
+    const capitalizeFirst = (str) => {
+      if (!str) return '';
+      const trimmed = str.trim();
+      return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+    };
 
-    const tableData = filteredTasks.map((task) => {
-      const wbsNum = generateWBSString(task.originalIndex);
-      const indent = "    ".repeat(task.level); 
+    const tableData = tasks.map((task, index) => {
+      const wbsNum = generateWBSString(index);
+      const taskText = capitalizeFirst(task.text);
+      const indent = "        ".repeat(task.level); 
+
+      // Requirement 1: All statuses mapped directly to ALL CAPS
+      let statusText = task.status;
+      if (task.status === 'stuck') statusText = `!!! STUCK !!!`;
+      else if (task.status === 'completed') statusText = `[V] COMPLETED`;
+      else if (task.status === 'in progress') statusText = `[>] IN PROGRESS`;
+      else if (task.status === 'to be started') statusText = `[-] TO BE STARTED`;
+
+      // Requirement 2: Clean dates without wrapping asterisks (*)
+      const startStr = formatDateShort(task.startDate);
+      const endStr = formatDateShort(task.endDate);
+      const remarksText = capitalizeFirst(task.remarks) || '-';
+
       return [
         wbsNum,
-        indent + task.text,
+        indent + taskText,
         task.assignedTo.join(', ') || '-',
-        task.status,
-        formatDateShort(task.startDate),
+        statusText,
+        startStr,
         task.days || '-',
-        formatDateShort(task.endDate),
-        task.remarks || '-'
+        endStr,
+        remarksText
       ];
     });
 
     autoTable(doc, {
-      startY: yOffset,
+      startY: 30,
       head: [['WBS', 'TASK DESCRIPTION', 'SUPERVISOR', 'STATUS', 'START', 'DAYS', 'END DATE', 'REMARKS']],
       body: tableData,
       theme: 'grid',
-      headStyles: { fillGray: [240, 240, 240], textColor: [50, 50, 50], fontStyle: 'bold', fontSize: 8 },
-      styles: { fontSize: 7, cellPadding: 2, valign: 'middle' },
+      // Requirement 4: High-contrast pure black and white theme for header bar
+      headStyles: { fillColor: [0, 0, 0], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+      // Requirement 3: Explicitly declaring textColor [0,0,0] (pure black) stops text looking faint or gray
+      styles: { fontSize: 7, cellPadding: 2, valign: 'middle', textColor: [0, 0, 0] },
       columnStyles: {
         0: { cellWidth: 15 },
         1: { cellWidth: 65 },
         2: { cellWidth: 40 },
-        3: { cellWidth: 25 },
-        4: { cellWidth: 20 },
-        5: { cellWidth: 12 },
-        6: { cellWidth: 20 },
+        3: { cellWidth: 25, halign: 'center' }, 
+        4: { cellWidth: 20, halign: 'center' }, 
+        5: { cellWidth: 12, halign: 'center' }, 
+        6: { cellWidth: 20, halign: 'center' }, 
         7: { cellWidth: 'auto' }
       },
       didParseCell: (data) => {
-        const task = filteredTasks[data.row.index];
-        if (data.section === 'body' && task) {
-          if (task.level === 0) data.cell.styles.fillColor = [235, 248, 255];
-          else if (task.level === 1) data.cell.styles.fillColor = [255, 255, 255];
-          else if (task.level === 2) data.cell.styles.fillColor = [248, 250, 252];
-          else if (task.level === 3) data.cell.styles.fillColor = [241, 245, 249];
-          else if (task.level >= 4) data.cell.styles.fillColor = [226, 232, 240];
-          
-          if (data.column.index === 3) {
-            const colors = getStatusColor(task.status);
-            if (colors) {
-              data.cell.styles.fillColor = colors.fill;
-              data.cell.styles.textColor = colors.text;
-            }
+        const taskIdx = data.row.index;
+        const task = tasks[taskIdx];
+        
+        if (data.section === 'body') {
+          // Softened background fills slightly to optimize contrast against deep black text
+          if (task.level === 0) {
+            data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.fillColor = [215, 215, 215]; 
+          } else if (task.level === 1) {
+            data.cell.styles.fillColor = [255, 255, 255]; 
+          } else if (task.level === 2) {
+            data.cell.styles.fillColor = [248, 248, 248]; 
+          } else if (task.level === 3) {
+            data.cell.styles.fillColor = [238, 238, 238]; 
+          } else if (task.level >= 4) {
+            data.cell.styles.fillColor = [228, 228, 228]; 
           }
+          
+          const isStartHighlight = task.startDate === reportDate;
+          const isEndHighlight = task.endDate === reportDate;
+          const isDateColumnHighlighted = (data.column.index === 4 && isStartHighlight) || (data.column.index === 6 && isEndHighlight);
+          const isStuckStatusColumn = (data.column.index === 3 && task.status === 'stuck');
 
-          const isStartRed = task.startDate === reportDate;
-          const isEndRed = task.endDate === reportDate;
-          if ((data.column.index === 4 && isStartRed) || (data.column.index === 6 && isEndRed)) {
-            data.cell.styles.fillColor = [254, 202, 202];
-            data.cell.styles.textColor = [153, 27, 27];
+          // Shared solid-dark style block for critical items
+          if (isStuckStatusColumn || isDateColumnHighlighted) {
+            data.cell.styles.fillColor = [50, 50, 50]; 
+            data.cell.styles.textColor = [255, 255, 255]; // Keeps white text highly visible over dark background block
+            data.cell.styles.fontStyle = 'bold';
+          } else if (data.column.index === 3) {
+            if (task.status === 'completed') {
+              data.cell.styles.fontStyle = 'italic';
+              data.cell.styles.textColor = [0, 0, 0]; // Maintained solid black color so it prints clearly
+            } else if (task.status === 'in progress') {
+              data.cell.styles.fontStyle = 'bold';
+            }
           }
         }
       }
