@@ -5,7 +5,7 @@ import autoTable from 'jspdf-autotable';
 import './App.css';
 
 const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh C.", "Lokesh", "Jay", "Mahender","Anil"];
-const STATUS_OPTIONS = ["-", "to be started", "in progress", "completed", "stuck"];
+const STATUS_OPTIONS = ["-", "To be started", "In progress", "Completed", "Stuck"];
 const LEVEL_OPTIONS = [0, 1, 2, 3, 4, 5];
 
 function App() {
