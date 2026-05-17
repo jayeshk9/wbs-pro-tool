@@ -15,7 +15,8 @@ function App() {
       { 
         id: 'initial-1', text: 'Project Start', level: 0, isCollapsed: false,
         assignedTo: [], status: '-', 
-        startDate: '', days: '', endDate: '', remarks: '' 
+        startDate: '', days: '', endDate: '', remarks: '',
+        origStartDate: '', origDays: '', origEndDate: ''
       }
     ];
   });
@@ -23,6 +24,7 @@ function App() {
   const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
   const [focusId, setFocusId] = useState(null);
   const [activeMenu, setActiveMenu] = useState(null);
+  const [hoveredTaskId, setHoveredTaskId] = useState(null);
 
   // Filter States
   const [filterSupervisors, setFilterSupervisors] = useState([]);
@@ -132,9 +134,22 @@ function App() {
       else if (task.status === 'in progress') statusText = `[>] IN PROGRESS`;
       else if (task.status === 'to be started') statusText = `[-] TO BE STARTED`;
 
-      // Requirement 2: Clean dates without wrapping asterisks (*)
-      const startStr = formatDateShort(task.startDate);
-      const endStr = formatDateShort(task.endDate);
+      // Requirement 2 & 3: Clean dates and days inside single stacked lines
+      let startStr = formatDateShort(task.startDate);
+      if (task.origStartDate && task.origStartDate !== task.startDate) {
+        startStr += `\n(${formatDateShort(task.origStartDate)})`;
+      }
+
+      let daysStr = task.days || '-';
+      if (task.origDays && String(task.origDays) !== String(task.days)) {
+        daysStr += `\n(${task.origDays})`;
+      }
+
+      let endStr = formatDateShort(task.endDate);
+      if (task.origEndDate && task.origEndDate !== task.endDate) {
+        endStr += `\n(${formatDateShort(task.origEndDate)})`;
+      }
+
       const remarksText = capitalizeFirst(task.remarks) || '-';
 
       return [
@@ -143,7 +158,7 @@ function App() {
         task.assignedTo.join(', ') || '-',
         statusText,
         startStr,
-        task.days || '-',
+        daysStr,
         endStr,
         remarksText
       ];
@@ -232,6 +247,26 @@ function App() {
     return { ...task, [field]: value, startDate, days, endDate };
   };
 
+  const updateOrigDates = (task, field, value) => {
+    let { origStartDate, origDays, origEndDate } = { ...task, [field]: value };
+    if (field === 'origStartDate' || field === 'origDays') {
+      if (origStartDate && origDays && !isNaN(origDays)) {
+        const start = new Date(origStartDate);
+        const end = new Date(start);
+        end.setDate(start.getDate() + (parseInt(origDays) - 1));
+        origEndDate = end.toISOString().split('T')[0];
+      }
+    } else if (field === 'origEndDate') {
+      if (origStartDate && origEndDate) {
+        const start = new Date(origStartDate);
+        const end = new Date(origEndDate);
+        const diffDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+        origDays = diffDays > 0 ? diffDays : '';
+      }
+    }
+    return { ...task, [field]: value, origStartDate, origDays, origEndDate };
+  };
+
   const addTask = (afterIndex = null) => {
     const newId = `task-${Date.now()}`;
     const newTasks = [...tasks];
@@ -240,7 +275,8 @@ function App() {
 
     newTasks.splice(insertAt, 0, { 
       id: newId, text: '', level: levelToUse, isCollapsed: false,
-      assignedTo: [], status: '-', startDate: '', days: '', endDate: '', remarks: '' 
+      assignedTo: [], status: '-', startDate: '', days: '', endDate: '', remarks: '',
+      origStartDate: '', origDays: '', origEndDate: ''
     });
     setTasks(newTasks);
     setFocusId(newId);
@@ -257,7 +293,7 @@ function App() {
     
     if (copy.length === 0) {
       const initId = `init-${Date.now()}`;
-      setTasks([{ id: initId, text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-' }]);
+      setTasks([{ id: initId, text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', origStartDate: '', origDays: '', origEndDate: '' }]);
       setFocusId(initId);
     } else {
       setTasks(copy);
@@ -322,7 +358,7 @@ function App() {
               <button className="secondary-btn print-btn" onClick={exportToPDF}>Print PDF</button>
               <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
               <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
-              <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && setTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-' }])}>Clear All</button>
+              <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && setTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', origStartDate: '', origDays: '', origEndDate: '' }])}>Clear All</button>
             </div>
           </div>
         </div>
@@ -446,6 +482,13 @@ function App() {
                     const isMenuOpen = activeMenu?.id === task.id;
                     const showBlueAccent = task.level === 0 || (hasChildren && task.isCollapsed);
 
+                    const isZoneHovered = hoveredTaskId === task.id;
+                    const hasBaseline = !!(task.origStartDate || task.origDays || task.origEndDate);
+
+                    const displayOrigStart = isZoneHovered || (task.origStartDate && task.origStartDate !== task.startDate);
+                    const displayOrigDays = isZoneHovered || (task.origDays && String(task.origDays) !== String(task.days));
+                    const displayOrigEnd = isZoneHovered || (task.origEndDate && task.origEndDate !== task.endDate);
+
                     return (
                       <Draggable key={task.id} draggableId={task.id} index={fIndex} isDragDisabled={isFilterActive}>
                         {(provided) => (
@@ -491,21 +534,95 @@ function App() {
                               </div>
                             </div>
 
-                            <div className="col date-col">
-                              <div className={`cell-input ${task.startDate === reportDate ? 'date-highlight-red' : ''}`}>
-                                <input type="date" value={task.startDate} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'startDate', e.target.value) : t))} className="clean-input date-input" />
+                            {/* Start Date Column */}
+                            <div 
+                              className="col date-col"
+                              onMouseEnter={() => setHoveredTaskId(task.id)}
+                              onMouseLeave={() => setHoveredTaskId(null)}
+                            >
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', alignItems: 'stretch' }}>
+                                <div className={`cell-input ${task.startDate === reportDate ? 'date-highlight-red' : ''}`}>
+                                  <input type="date" value={task.startDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'startDate', e.target.value) : t))} className="clean-input date-input" />
+                                </div>
+                                {displayOrigStart && (
+                                  <div style={{ display: 'flex', alignItems: 'center', fontSize: '10px', background: '#f1f5f9', borderRadius: '4px', padding: '1px 4px', border: '1px dashed #cbd5e1' }}>
+                                    <span style={{ marginRight: '4px', fontWeight: 'bold', color: '#64748b' }}>O:</span>
+                                    <input type="date" value={task.origStartDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateOrigDates(t, 'origStartDate', e.target.value) : t))} className="clean-input date-input" style={{ fontSize: '10px', color: '#475569', padding: '0', background: 'transparent' }} />
+                                  </div>
+                                )}
                               </div>
                             </div>
 
-                            <div className="col day-col">
-                              <div className="cell-input">
-                                <input type="number" value={task.days} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'days', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" />
+                            {/* Days Column */}
+                            <div 
+                              className="col day-col"
+                              onMouseEnter={() => setHoveredTaskId(task.id)}
+                              onMouseLeave={() => setHoveredTaskId(null)}
+                              style={{ position: 'relative' }}
+                            >
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', alignItems: 'stretch' }}>
+                                <div className="cell-input">
+                                  <input type="number" value={task.days || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'days', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" />
+                                </div>
+                                {displayOrigDays && (
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', background: '#f1f5f9', borderRadius: '4px', padding: '1px 4px', border: '1px dashed #cbd5e1' }}>
+                                    <span style={{ marginRight: '2px', fontWeight: 'bold', color: '#64748b' }}>O:</span>
+                                    <input type="number" value={task.origDays || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateOrigDates(t, 'origDays', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" style={{ fontSize: '10px', color: '#475569', padding: '0', background: 'transparent', width: '100%' }} />
+                                  </div>
+                                )}
                               </div>
+
+                              {/* Target Safe Row-Level Absolute Control Button Trigger */}
+                              {isZoneHovered && (
+                                <button 
+                                  className="baseline-hover-btn"
+                                  style={{
+                                    position: 'absolute',
+                                    left: '50%',
+                                    transform: 'translateX(-50%)',
+                                    top: '2px',
+                                    zIndex: 10,
+                                    background: hasBaseline ? '#dc2626' : '#2563eb',
+                                    color: '#ffffff',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    padding: '1px 5px',
+                                    fontSize: '9px',
+                                    fontWeight: 'bold',
+                                    cursor: 'pointer',
+                                    boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+                                    whiteSpace: 'nowrap'
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (hasBaseline) {
+                                      setTasks(tasks.map(t => t.id === task.id ? { ...t, origStartDate: '', origDays: '', origEndDate: '' } : t));
+                                    } else {
+                                      setTasks(tasks.map(t => t.id === task.id ? { ...t, origStartDate: t.startDate, origDays: t.days, origEndDate: t.endDate } : t));
+                                    }
+                                  }}
+                                >
+                                  {hasBaseline ? 'Delete Original' : 'Set Original'}
+                                </button>
+                              )}
                             </div>
 
-                            <div className="col date-col">
-                              <div className={`cell-input ${task.endDate === reportDate ? 'date-highlight-red' : ''}`}>
-                                <input type="date" value={task.endDate} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'endDate', e.target.value) : t))} className="clean-input date-input" />
+                            {/* End Date Column */}
+                            <div 
+                              className="col date-col"
+                              onMouseEnter={() => setHoveredTaskId(task.id)}
+                              onMouseLeave={() => setHoveredTaskId(null)}
+                            >
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', alignItems: 'stretch' }}>
+                                <div className={`cell-input ${task.endDate === reportDate ? 'date-highlight-red' : ''}`}>
+                                  <input type="date" value={task.endDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'endDate', e.target.value) : t))} className="clean-input date-input" />
+                                </div>
+                                {displayOrigEnd && (
+                                  <div style={{ display: 'flex', alignItems: 'center', fontSize: '10px', background: '#f1f5f9', borderRadius: '4px', padding: '1px 4px', border: '1px dashed #cbd5e1' }}>
+                                    <span style={{ marginRight: '4px', fontWeight: 'bold', color: '#64748b' }}>O:</span>
+                                    <input type="date" value={task.origEndDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateOrigDates(t, 'origEndDate', e.target.value) : t))} className="clean-input date-input" style={{ fontSize: '10px', color: '#475569', padding: '0', background: 'transparent' }} />
+                                  </div>
+                                )}
                               </div>
                             </div>
 
