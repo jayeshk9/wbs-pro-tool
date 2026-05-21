@@ -14,7 +14,8 @@ function App() {
     return saved ? JSON.parse(saved) : [
       { 
         id: 'initial-1', text: 'Project Start', level: 0, isCollapsed: false,
-        assignedTo: [], status: '-', 
+        assignedTo: [], status: '-', statusType: 'text',
+        tillYest: '', today: '', totalTarget: '',
         startDate: '', days: '', endDate: '', remarks: '',
         origStartDate: '', origDays: '', origEndDate: ''
       }
@@ -72,21 +73,17 @@ function App() {
     return `${d}/${m}/${y.slice(-2)}`;
   };
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'to be started': return { fill: [255, 219, 171], text: [154, 52, 18] }; 
-      case 'in progress': return { fill: [191, 219, 254], text: [30, 64, 175] }; 
-      case 'completed': return { fill: [187, 247, 208], text: [22, 101, 52] }; 
-      case 'stuck': return { fill: [254, 202, 202], text: [153, 27, 27] }; 
-      default: return null;
-    }
-  };
-
   // Filter Logic
   const filteredTasks = useMemo(() => {
     return tasks.map((task, originalIndex) => ({ ...task, originalIndex })).filter(task => {
       const matchSup = filterSupervisors.length === 0 || task.assignedTo.some(s => filterSupervisors.includes(s));
-      const matchStatus = filterStatuses.length === 0 || filterStatuses.includes(task.status);
+      
+      let matchStatus = true;
+      if (filterStatuses.length > 0) {
+        const currentStatusVal = task.statusType === 'fraction' ? 'fraction' : task.status;
+        matchStatus = filterStatuses.includes(currentStatusVal);
+      }
+      
       const matchLevel = filterLevels.length === 0 || filterLevels.includes(task.level);
       
       let matchDate = true;
@@ -127,14 +124,18 @@ function App() {
       const taskText = capitalizeFirst(task.text);
       const indent = "        ".repeat(task.level); 
 
-      // Requirement 1: All statuses mapped directly to ALL CAPS
-      let statusText = task.status;
-      if (task.status === 'stuck') statusText = `!!! STUCK !!!`;
-      else if (task.status === 'completed') statusText = `[V] COMPLETED`;
-      else if (task.status === 'in progress') statusText = `[>] IN PROGRESS`;
-      else if (task.status === 'to be started') statusText = `[-] TO BE STARTED`;
+      let statusText = '';
+      if (task.statusType === 'fraction') {
+        // We leave this blank in the string parsing because we will manually draw it in didDrawCell
+        statusText = ''; 
+      } else {
+        if (task.status === 'stuck') statusText = `!!! STUCK !!!`;
+        else if (task.status === 'completed') statusText = `[V] COMPLETED`;
+        else if (task.status === 'in progress') statusText = `[>] IN PROGRESS`;
+        else if (task.status === 'to be started') statusText = `[-] TO BE STARTED`;
+        else statusText = '-';
+      }
 
-      // Requirement 2 & 3: Clean dates and days inside single stacked lines
       let startStr = formatDateShort(task.startDate);
       if (task.origStartDate && task.origStartDate !== task.startDate) {
         startStr += `\n${formatDateShort(task.origStartDate)}`;
@@ -169,15 +170,13 @@ function App() {
       head: [['WBS', 'TASK DESCRIPTION', 'SUPERVISOR', 'STATUS', 'START', 'DAYS', 'END DATE', 'REMARKS']],
       body: tableData,
       theme: 'grid',
-      // Requirement 4: High-contrast pure black and white theme for header bar
       headStyles: { fillColor: [0, 0, 0], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
-      // Requirement 3: Explicitly declaring textColor [0,0,0] (pure black) stops text looking faint or gray
       styles: { fontSize: 7, cellPadding: 2, valign: 'middle', textColor: [0, 0, 0] },
       columnStyles: {
         0: { cellWidth: 15 },
         1: { cellWidth: 65 },
-        2: { cellWidth: 40 },
-        3: { cellWidth: 25, halign: 'center' }, 
+        2: { cellWidth: 35 },
+        3: { cellWidth: 30, halign: 'center' }, 
         4: { cellWidth: 20, halign: 'center' }, 
         5: { cellWidth: 12, halign: 'center' }, 
         6: { cellWidth: 20, halign: 'center' }, 
@@ -188,7 +187,6 @@ function App() {
         const task = tasks[taskIdx];
         
         if (data.section === 'body') {
-          // Softened background fills slightly to optimize contrast against deep black text
           if (task.level === 0) {
             data.cell.styles.fontStyle = 'bold';
             data.cell.styles.fillColor = [215, 215, 215]; 
@@ -205,17 +203,16 @@ function App() {
           const isStartHighlight = task.startDate === reportDate;
           const isEndHighlight = task.endDate === reportDate;
           const isDateColumnHighlighted = (data.column.index === 4 && isStartHighlight) || (data.column.index === 6 && isEndHighlight);
-          const isStuckStatusColumn = (data.column.index === 3 && task.status === 'stuck');
+          const isStuckStatusColumn = (data.column.index === 3 && task.statusType !== 'fraction' && task.status === 'stuck');
 
-          // Shared solid-dark style block for critical items
           if (isStuckStatusColumn || isDateColumnHighlighted) {
             data.cell.styles.fillColor = [50, 50, 50]; 
-            data.cell.styles.textColor = [255, 255, 255]; // Keeps white text highly visible over dark background block
+            data.cell.styles.textColor = [255, 255, 255]; 
             data.cell.styles.fontStyle = 'bold';
-          } else if (data.column.index === 3) {
+          } else if (data.column.index === 3 && task.statusType !== 'fraction') {
             if (task.status === 'completed') {
               data.cell.styles.fontStyle = 'italic';
-              data.cell.styles.textColor = [0, 0, 0]; // Maintained solid black color so it prints clearly
+              data.cell.styles.textColor = [0, 0, 0]; 
             } else if (task.status === 'in progress') {
               data.cell.styles.fontStyle = 'bold';
             }
@@ -233,8 +230,8 @@ function App() {
           if (colIdx === 5 && task.origDays && String(task.origDays) !== String(task.days)) hasDiff = true;
           if (colIdx === 6 && task.origEndDate && task.origEndDate !== task.endDate) hasDiff = true;
           
-          if (hasDiff) {
-            // Prevent autotable from running its default text rendering pass
+          // Blank out text generation for overridden manual drawing cells
+          if (hasDiff || (colIdx === 3 && task.statusType === 'fraction')) {
             data.cell.text = ['', ''];
           }
         }
@@ -244,7 +241,39 @@ function App() {
           const taskIdx = data.row.index;
           const task = tasks[taskIdx];
           const colIdx = data.column.index;
+
+          // Fraction Mode Specific Drawing
+          if (colIdx === 3 && task.statusType === 'fraction') {
+            const yest = parseFloat(task.tillYest) || 0;
+            const tod = parseFloat(task.today) || 0;
+            const tot = parseFloat(task.totalTarget) || 0;
+            const workingDays = parseFloat(task.days) || 0;
+            const expDelta = (tot > 0 && workingDays > 0) ? (tot / workingDays).toFixed(1) : '-';
+
+            const line1 = `${yest} + ${tod}`;
+            const line2 = `${tot} (Exp: ${expDelta})`;
+
+            // Draw the fraction line
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.15);
+            const midY = data.cell.y + (data.cell.height / 2);
+            // Added slight padding (2px) on left and right so the line doesn't touch the borders
+            doc.line(data.cell.x + 2, midY, data.cell.x + data.cell.width - 2, midY); 
+
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(0, 0, 0);
+
+            const centerX = data.cell.x + data.cell.width / 2;
+            const centerY1 = data.cell.y + (data.cell.height / 4);
+            const centerY2 = data.cell.y + (3 * data.cell.height / 4);
+
+            doc.text(line1, centerX, centerY1, { align: 'center', baseline: 'middle' });
+            doc.text(line2, centerX, centerY2, { align: 'center', baseline: 'middle' });
+            return; // Exit early so it doesn't conflict with the date logic
+          }
           
+          // Existing Date Baseline Drawing Logic
           let hasDiff = false;
           let line1 = '';
           let line2 = '';
@@ -268,7 +297,6 @@ function App() {
             const isEndHighlight = task.endDate === reportDate;
             const isHighlighted = (colIdx === 4 && isStartHighlight) || (colIdx === 6 && isEndHighlight);
             
-            // 1. Draw horizontal splitting line
             if (isHighlighted) {
               doc.setDrawColor(255, 255, 255);
             } else {
@@ -278,7 +306,6 @@ function App() {
             const midY = data.cell.y + (data.cell.height / 2);
             doc.line(data.cell.x, midY, data.cell.x + data.cell.width, midY);
             
-            // 2. Set styles matching autotable's rules for this cell
             doc.setFontSize(data.cell.styles.fontSize || 7);
             const fontStyle = data.cell.styles.fontStyle || 'normal';
             doc.setFont('helvetica', fontStyle);
@@ -290,7 +317,6 @@ function App() {
               doc.setTextColor(0, 0, 0);
             }
             
-            // 3. Compute target coordinates for perfectly vertically centered half-cell lines
             const centerX = data.cell.x + data.cell.width / 2;
             const centerY1 = data.cell.y + (data.cell.height / 4);
             const centerY2 = data.cell.y + (3 * data.cell.height / 4);
@@ -353,7 +379,9 @@ function App() {
 
     newTasks.splice(insertAt, 0, { 
       id: newId, text: '', level: levelToUse, isCollapsed: false,
-      assignedTo: [], status: '-', startDate: '', days: '', endDate: '', remarks: '',
+      assignedTo: [], status: '-', statusType: 'text',
+      tillYest: '', today: '', totalTarget: '',
+      startDate: '', days: '', endDate: '', remarks: '',
       origStartDate: '', origDays: '', origEndDate: ''
     });
     setTasks(newTasks);
@@ -371,7 +399,7 @@ function App() {
     
     if (copy.length === 0) {
       const initId = `init-${Date.now()}`;
-      setTasks([{ id: initId, text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', origStartDate: '', origDays: '', origEndDate: '' }]);
+      setTasks([{ id: initId, text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', statusType: 'text', tillYest: '', today: '', totalTarget: '', origStartDate: '', origDays: '', origEndDate: '' }]);
       setFocusId(initId);
     } else {
       setTasks(copy);
@@ -436,7 +464,7 @@ function App() {
               <button className="secondary-btn print-btn" onClick={exportToPDF}>Print PDF</button>
               <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
               <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
-              <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && setTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', origStartDate: '', origDays: '', origEndDate: '' }])}>Clear All</button>
+              <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && setTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', statusType: 'text', tillYest: '', today: '', totalTarget: '', origStartDate: '', origDays: '', origEndDate: '' }])}>Clear All</button>
             </div>
           </div>
         </div>
@@ -477,6 +505,9 @@ function App() {
                         <input type="checkbox" checked={filterStatuses.includes(opt)} onChange={() => setFilterStatuses(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> {opt}
                       </label>
                     ))}
+                    <label className="menu-item">
+                      <input type="checkbox" checked={filterStatuses.includes('fraction')} onChange={() => setFilterStatuses(prev => prev.includes('fraction') ? prev.filter(v => v !== 'fraction') : [...prev, 'fraction'])} /> Progress Tracking
+                    </label>
                   </div>
                 </div>
               )}
@@ -518,7 +549,6 @@ function App() {
           if (!result.destination) return;
           const sIdx = result.source.index;
           const dIdx = result.destination.index;
-          // Drag and drop usually works on the full list. In filtered view, DND is typically disabled to prevent logical errors.
           if (isFilterActive) return; 
 
           const blockSize = (tasks[sIdx].isCollapsed ? getSubtaskRange(sIdx) : sIdx) - sIdx + 1;
@@ -547,7 +577,6 @@ function App() {
                   {filteredTasks.map((task, fIndex) => {
                     const originalIndex = task.originalIndex;
                     
-                    // Collapsed Visibility Logic (Only if NO filters are active)
                     if (!isFilterActive) {
                       let visible = true;
                       for (let i = 0; i < originalIndex; i++) {
@@ -566,6 +595,10 @@ function App() {
                     const displayOrigStart = isZoneHovered || (task.origStartDate && task.origStartDate !== task.startDate);
                     const displayOrigDays = isZoneHovered || (task.origDays && String(task.origDays) !== String(task.days));
                     const displayOrigEnd = isZoneHovered || (task.origEndDate && task.origEndDate !== task.endDate);
+
+                    const totTarget = parseFloat(task.totalTarget) || 0;
+                    const countDays = parseFloat(task.days) || 0;
+                    const expectedDelta = (totTarget > 0 && countDays > 0) ? (totTarget / countDays).toFixed(1) : '-';
 
                     return (
                       <Draggable key={task.id} draggableId={task.id} index={fIndex} isDragDisabled={isFilterActive}>
@@ -604,12 +637,41 @@ function App() {
                               </div>
                             </div>
 
+                            {/* Dashboard Expected Delta Format Applied Here */}
                             <div className="col status-col">
-                              <div className={`cell-input status-bg-${task.status.replace(/\s+/g, '-')}`}>
-                                <select value={task.status} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => toggleSelection(task.id, 'status', e.target.value)} className={`select-clean status-text-${task.status.replace(/\s+/g, '-')}`}>
-                                  {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-                                </select>
-                              </div>
+                              {task.statusType === 'fraction' ? (
+                                <div className="fraction-status-layout">
+                                  <div className="fraction-numerator">
+                                    <input type="number" value={task.tillYest || ''} title="Till Yesterday Progress" onChange={(e) => toggleSelection(task.id, 'tillYest', e.target.value)} placeholder="Yest" className="fraction-sub-input" />
+                                    <span className="fraction-operator">+</span>
+                                    <input type="number" value={task.today || ''} title="Today Progress" onChange={(e) => toggleSelection(task.id, 'today', e.target.value)} placeholder="Tod" className="fraction-sub-input" />
+                                    <button className="status-mode-toggle-btn" title="Close Tracking" onClick={() => toggleSelection(task.id, 'statusType', 'text')}>×</button>
+                                  </div>
+                                  <div className="fraction-divider"></div>
+                                  <div className="fraction-denominator">
+                                    <input type="number" value={task.totalTarget || ''} title="Total Target Quantity" onChange={(e) => toggleSelection(task.id, 'totalTarget', e.target.value)} placeholder="Tot" className="fraction-sub-input font-bold" />
+                                    <span className="delta-value">(Exp: {expectedDelta})</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className={`cell-input status-bg-${task.status.replace(/\s+/g, '-')}`}>
+                                  <select 
+                                    value={task.status} 
+                                    onKeyDown={(e) => handleKeyDown(e, originalIndex)} 
+                                    onChange={(e) => {
+                                      if (e.target.value === 'fraction') {
+                                        toggleSelection(task.id, 'statusType', 'fraction');
+                                      } else {
+                                        toggleSelection(task.id, 'status', e.target.value);
+                                      }
+                                    }} 
+                                    className={`select-clean status-text-${task.status.replace(/\s+/g, '-')}`}
+                                  >
+                                    {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                                    <option value="fraction">progress mode</option>
+                                  </select>
+                                </div>
+                              )}
                             </div>
 
                             {/* Start Date Column */}
@@ -650,7 +712,6 @@ function App() {
                                 )}
                               </div>
 
-                              {/* Target Safe Row-Level Absolute Control Button Trigger */}
                               {isZoneHovered && (
                                 <button 
                                   className="baseline-hover-btn"
