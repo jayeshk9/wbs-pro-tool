@@ -2,25 +2,27 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { db } from './firebase';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import './App.css';
 
 const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh C.", "Lokesh", "Jay", "Mahender","Anil"];
 const STATUS_OPTIONS = ["-", "to be started", "in progress", "completed", "stuck"];
 const LEVEL_OPTIONS = [0, 1, 2, 3, 4, 5];
 
+// Firebase Document Reference
+const PROJECT_DOC = "main-project"; 
+
 function App() {
-  const [tasks, setTasks] = useState(() => {
-    const saved = localStorage.getItem('wbs-v16-data');
-    return saved ? JSON.parse(saved) : [
-      { 
-        id: 'initial-1', text: 'Project Start', level: 0, isCollapsed: false,
-        assignedTo: [], status: '-', statusType: 'text',
-        tillYest: '', today: '', totalTarget: '',
-        startDate: '', days: '', endDate: '', remarks: '',
-        origStartDate: '', origDays: '', origEndDate: ''
-      }
-    ];
-  });
+  const [tasks, setTasks] = useState([
+    { 
+      id: 'initial-1', text: 'Loading project...', level: 0, isCollapsed: false,
+      assignedTo: [], status: '-', statusType: 'text',
+      tillYest: '', today: '', totalTarget: '',
+      startDate: '', days: '', endDate: '', remarks: '',
+      origStartDate: '', origDays: '', origEndDate: ''
+    }
+  ]);
 
   const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
   const [focusId, setFocusId] = useState(null);
@@ -33,15 +35,48 @@ function App() {
   const [filterLevels, setFilterLevels] = useState([]);
   const [filterDateRange, setFilterDateRange] = useState({ start: '', end: '' });
 
+  // 1. FIREBASE REAL-TIME SYNC
   useEffect(() => {
-    localStorage.setItem('wbs-v16-data', JSON.stringify(tasks));
-  }, [tasks]);
+    const docRef = doc(db, 'projects', PROJECT_DOC);
+    
+    // Listen for changes from the cloud automatically
+    const unsubscribe = onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setTasks(snapshot.data().tasks);
+      } else {
+        // If document doesn't exist yet, initialize it
+        const defaultTask = [{ 
+          id: 'initial-1', text: 'Project Start', level: 0, isCollapsed: false,
+          assignedTo: [], status: '-', statusType: 'text',
+          tillYest: '', today: '', totalTarget: '',
+          startDate: '', days: '', endDate: '', remarks: '',
+          origStartDate: '', origDays: '', origEndDate: ''
+        }];
+        setDoc(docRef, { tasks: defaultTask });
+        setTasks(defaultTask);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // 2. FIREBASE WRITE HELPER
+  const syncTasks = (newTasks) => {
+    setTasks(newTasks); // Update local UI instantly
+    setDoc(doc(db, 'projects', PROJECT_DOC), { tasks: newTasks }, { merge: true }); // Sync to cloud
+  };
 
   useEffect(() => {
     const handleClick = () => setActiveMenu(null);
     window.addEventListener('click', handleClick);
     return () => window.removeEventListener('click', handleClick);
   }, []);
+
+  // 3. AUTO-CAPITALIZE HELPER
+  const capitalizeFirst = (str) => {
+    if (!str) return '';
+    return str.charAt(0).toUpperCase() + str.slice(1);
+  };
 
   const getSubtaskRange = useCallback((index) => {
     const parentLevel = tasks[index].level;
@@ -73,24 +108,19 @@ function App() {
     return `${d}/${m}/${y.slice(-2)}`;
   };
 
-  // Filter Logic
   const filteredTasks = useMemo(() => {
     return tasks.map((task, originalIndex) => ({ ...task, originalIndex })).filter(task => {
       const matchSup = filterSupervisors.length === 0 || task.assignedTo.some(s => filterSupervisors.includes(s));
-      
       let matchStatus = true;
       if (filterStatuses.length > 0) {
         const currentStatusVal = task.statusType === 'fraction' ? 'fraction' : task.status;
         matchStatus = filterStatuses.includes(currentStatusVal);
       }
-      
       const matchLevel = filterLevels.length === 0 || filterLevels.includes(task.level);
-      
       let matchDate = true;
       if (filterDateRange.start && filterDateRange.end) {
         matchDate = task.endDate ? (task.endDate >= filterDateRange.start && task.endDate <= filterDateRange.end) : false;
       }
-
       return matchSup && matchStatus && matchLevel && matchDate;
     });
   }, [tasks, filterSupervisors, filterStatuses, filterLevels, filterDateRange]);
@@ -113,20 +143,13 @@ function App() {
     doc.setFontSize(10);
     doc.text(`Date: ${todayStr}`, 14, 22);
 
-    const capitalizeFirst = (str) => {
-      if (!str) return '';
-      const trimmed = str.trim();
-      return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-    };
-
     const tableData = tasks.map((task, index) => {
       const wbsNum = generateWBSString(index);
-      const taskText = capitalizeFirst(task.text);
+      const taskText = task.text; // Already capitalized in state now
       const indent = "        ".repeat(task.level); 
 
       let statusText = '';
       if (task.statusType === 'fraction') {
-        // We leave this blank in the string parsing because we will manually draw it in didDrawCell
         statusText = ''; 
       } else {
         if (task.status === 'stuck') statusText = `!!! STUCK !!!`;
@@ -151,7 +174,7 @@ function App() {
         endStr += `\n${formatDateShort(task.origEndDate)}`;
       }
 
-      const remarksText = capitalizeFirst(task.remarks) || '-';
+      const remarksText = task.remarks || '-';
 
       return [
         wbsNum,
@@ -230,7 +253,6 @@ function App() {
           if (colIdx === 5 && task.origDays && String(task.origDays) !== String(task.days)) hasDiff = true;
           if (colIdx === 6 && task.origEndDate && task.origEndDate !== task.endDate) hasDiff = true;
           
-          // Blank out text generation for overridden manual drawing cells
           if (hasDiff || (colIdx === 3 && task.statusType === 'fraction')) {
             data.cell.text = ['', ''];
           }
@@ -242,7 +264,6 @@ function App() {
           const task = tasks[taskIdx];
           const colIdx = data.column.index;
 
-          // Fraction Mode Specific Drawing
           if (colIdx === 3 && task.statusType === 'fraction') {
             const yest = parseFloat(task.tillYest) || 0;
             const tod = parseFloat(task.today) || 0;
@@ -253,11 +274,9 @@ function App() {
             const line1 = `${yest} + ${tod}`;
             const line2 = `${tot} (Exp: ${expDelta})`;
 
-            // Draw the fraction line
             doc.setDrawColor(0, 0, 0);
             doc.setLineWidth(0.15);
             const midY = data.cell.y + (data.cell.height / 2);
-            // Added slight padding (2px) on left and right so the line doesn't touch the borders
             doc.line(data.cell.x + 2, midY, data.cell.x + data.cell.width - 2, midY); 
 
             doc.setFontSize(7);
@@ -270,10 +289,9 @@ function App() {
 
             doc.text(line1, centerX, centerY1, { align: 'center', baseline: 'middle' });
             doc.text(line2, centerX, centerY2, { align: 'center', baseline: 'middle' });
-            return; // Exit early so it doesn't conflict with the date logic
+            return; 
           }
           
-          // Existing Date Baseline Drawing Logic
           let hasDiff = false;
           let line1 = '';
           let line2 = '';
@@ -384,7 +402,7 @@ function App() {
       startDate: '', days: '', endDate: '', remarks: '',
       origStartDate: '', origDays: '', origEndDate: ''
     });
-    setTasks(newTasks);
+    syncTasks(newTasks);
     setFocusId(newId);
   };
 
@@ -399,10 +417,10 @@ function App() {
     
     if (copy.length === 0) {
       const initId = `init-${Date.now()}`;
-      setTasks([{ id: initId, text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', statusType: 'text', tillYest: '', today: '', totalTarget: '', origStartDate: '', origDays: '', origEndDate: '' }]);
+      syncTasks([{ id: initId, text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', statusType: 'text', tillYest: '', today: '', totalTarget: '', origStartDate: '', origDays: '', origEndDate: '' }]);
       setFocusId(initId);
     } else {
-      setTasks(copy);
+      syncTasks(copy);
       if (targetId) setFocusId(targetId);
     }
   };
@@ -427,17 +445,24 @@ function App() {
   const changeLevel = (index, delta) => {
     const start = index;
     const end = tasks[index].isCollapsed ? getSubtaskRange(index) : index;
-    setTasks(tasks.map((t, i) => (i >= start && i <= end) ? { ...t, level: Math.max(0, Math.min(5, t.level + delta)) } : t));
+    syncTasks(tasks.map((t, i) => (i >= start && i <= end) ? { ...t, level: Math.max(0, Math.min(5, t.level + delta)) } : t));
   };
 
   const toggleSelection = (taskId, field, value) => {
-    setTasks(tasks.map(t => {
+    syncTasks(tasks.map(t => {
       if (t.id === taskId) {
         if (field === 'assignedTo') {
           const current = t.assignedTo || [];
           return { ...t, assignedTo: current.includes(value) ? current.filter(v => v !== value) : [...current, value] };
         }
-        return { ...t, [field]: value };
+        
+        // Auto-capitalize logic implemented here
+        let finalValue = value;
+        if (field === 'text' || field === 'remarks') {
+          finalValue = capitalizeFirst(value);
+        }
+
+        return { ...t, [field]: finalValue };
       }
       return t;
     }));
@@ -454,7 +479,7 @@ function App() {
     <div className="App">
       <header className="header">
         <div className="header-top">
-          <h1>WBS Pro <small>5.2</small></h1>
+          <h1>WBS Pro <small>5.3 (Cloud)</small></h1>
           <div className="header-controls">
             <div className="date-selector">
               <label>Report Date:</label>
@@ -462,19 +487,17 @@ function App() {
             </div>
             <div className="bulk-actions">
               <button className="secondary-btn print-btn" onClick={exportToPDF}>Print PDF</button>
-              <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
-              <button className="secondary-btn" onClick={() => setTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
-              <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && setTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', statusType: 'text', tillYest: '', today: '', totalTarget: '', origStartDate: '', origDays: '', origEndDate: '' }])}>Clear All</button>
+              <button className="secondary-btn" onClick={() => syncTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
+              <button className="secondary-btn" onClick={() => syncTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
+              <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && syncTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', statusType: 'text', tillYest: '', today: '', totalTarget: '', origStartDate: '', origDays: '', origEndDate: '' }])}>Clear All</button>
             </div>
           </div>
         </div>
 
-        {/* Filter Bar */}
         <div className="filter-bar">
           <div className="filter-group">
             <span className="filter-label">Filters:</span>
             
-            {/* Supervisor Filter */}
             <div className="filter-item popover-trigger">
               <button className={`filter-btn ${filterSupervisors.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-sup' ? null : {type: 'filter-sup'}); }}>
                 Supervisors {filterSupervisors.length > 0 && `(${filterSupervisors.length})`}
@@ -492,7 +515,6 @@ function App() {
               )}
             </div>
 
-            {/* Status Filter */}
             <div className="filter-item popover-trigger">
               <button className={`filter-btn ${filterStatuses.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-status' ? null : {type: 'filter-status'}); }}>
                 Status {filterStatuses.length > 0 && `(${filterStatuses.length})`}
@@ -513,7 +535,6 @@ function App() {
               )}
             </div>
 
-            {/* Level Filter */}
             <div className="filter-item popover-trigger">
               <button className={`filter-btn ${filterLevels.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-level' ? null : {type: 'filter-level'}); }}>
                 Levels {filterLevels.length > 0 && `(${filterLevels.length})`}
@@ -531,7 +552,6 @@ function App() {
               )}
             </div>
 
-            {/* Date Range Filter */}
             <div className="filter-item date-range-group">
               <label>Ends Between:</label>
               <input type="date" value={filterDateRange.start} onChange={(e) => setFilterDateRange({...filterDateRange, start: e.target.value})} className="filter-date-input" />
@@ -555,7 +575,7 @@ function App() {
           const copy = [...tasks];
           const block = copy.splice(sIdx, blockSize);
           copy.splice(dIdx > sIdx ? dIdx - blockSize + 1 : dIdx, 0, ...block);
-          setTasks(copy);
+          syncTasks(copy);
         }}>
           <div className="wbs-table">
             <div className="wbs-row header-row">
@@ -637,7 +657,6 @@ function App() {
                               </div>
                             </div>
 
-                            {/* Dashboard Expected Delta Format Applied Here */}
                             <div className="col status-col">
                               {task.statusType === 'fraction' ? (
                                 <div className="fraction-status-layout">
@@ -674,7 +693,6 @@ function App() {
                               )}
                             </div>
 
-                            {/* Start Date Column */}
                             <div 
                               className="col date-col"
                               onMouseEnter={() => setHoveredTaskId(task.id)}
@@ -682,18 +700,17 @@ function App() {
                             >
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', alignItems: 'stretch' }}>
                                 <div className={`cell-input ${task.startDate === reportDate ? 'date-highlight-red' : ''}`}>
-                                  <input type="date" value={task.startDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'startDate', e.target.value) : t))} className="clean-input date-input" />
+                                  <input type="date" value={task.startDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'startDate', e.target.value) : t))} className="clean-input date-input" />
                                 </div>
                                 {displayOrigStart && (
                                   <div style={{ display: 'flex', alignItems: 'center', fontSize: '10px', background: '#f1f5f9', borderRadius: '4px', padding: '1px 4px', border: '1px dashed #cbd5e1' }}>
                                     <span style={{ marginRight: '4px', fontWeight: 'bold', color: '#64748b' }}>O:</span>
-                                    <input type="date" value={task.origStartDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateOrigDates(t, 'origStartDate', e.target.value) : t))} className="clean-input date-input" style={{ fontSize: '10px', color: '#475569', padding: '0', background: 'transparent' }} />
+                                    <input type="date" value={task.origStartDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => syncTasks(tasks.map(t => t.id === task.id ? updateOrigDates(t, 'origStartDate', e.target.value) : t))} className="clean-input date-input" style={{ fontSize: '10px', color: '#475569', padding: '0', background: 'transparent' }} />
                                   </div>
                                 )}
                               </div>
                             </div>
 
-                            {/* Days Column */}
                             <div 
                               className="col day-col"
                               onMouseEnter={() => setHoveredTaskId(task.id)}
@@ -702,12 +719,12 @@ function App() {
                             >
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', alignItems: 'stretch' }}>
                                 <div className="cell-input">
-                                  <input type="number" value={task.days || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'days', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" />
+                                  <input type="number" value={task.days || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'days', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" />
                                 </div>
                                 {displayOrigDays && (
                                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', background: '#f1f5f9', borderRadius: '4px', padding: '1px 4px', border: '1px dashed #cbd5e1' }}>
                                     <span style={{ marginRight: '2px', fontWeight: 'bold', color: '#64748b' }}>O:</span>
-                                    <input type="number" value={task.origDays || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateOrigDates(t, 'origDays', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" style={{ fontSize: '10px', color: '#475569', padding: '0', background: 'transparent', width: '100%' }} />
+                                    <input type="number" value={task.origDays || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => syncTasks(tasks.map(t => t.id === task.id ? updateOrigDates(t, 'origDays', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" style={{ fontSize: '10px', color: '#475569', padding: '0', background: 'transparent', width: '100%' }} />
                                   </div>
                                 )}
                               </div>
@@ -716,28 +733,18 @@ function App() {
                                 <button 
                                   className="baseline-hover-btn"
                                   style={{
-                                    position: 'absolute',
-                                    left: '50%',
-                                    transform: 'translateX(-50%)',
-                                    top: '2px',
-                                    zIndex: 10,
-                                    background: hasBaseline ? '#dc2626' : '#2563eb',
-                                    color: '#ffffff',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    padding: '1px 5px',
-                                    fontSize: '9px',
-                                    fontWeight: 'bold',
-                                    cursor: 'pointer',
-                                    boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+                                    position: 'absolute', left: '50%', transform: 'translateX(-50%)',
+                                    top: '2px', zIndex: 10, background: hasBaseline ? '#dc2626' : '#2563eb',
+                                    color: '#ffffff', border: 'none', borderRadius: '4px', padding: '1px 5px',
+                                    fontSize: '9px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
                                     whiteSpace: 'nowrap'
                                   }}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     if (hasBaseline) {
-                                      setTasks(tasks.map(t => t.id === task.id ? { ...t, origStartDate: '', origDays: '', origEndDate: '' } : t));
+                                      syncTasks(tasks.map(t => t.id === task.id ? { ...t, origStartDate: '', origDays: '', origEndDate: '' } : t));
                                     } else {
-                                      setTasks(tasks.map(t => t.id === task.id ? { ...t, origStartDate: t.startDate, origDays: t.days, origEndDate: t.endDate } : t));
+                                      syncTasks(tasks.map(t => t.id === task.id ? { ...t, origStartDate: t.startDate, origDays: t.days, origEndDate: t.endDate } : t));
                                     }
                                   }}
                                 >
@@ -746,7 +753,6 @@ function App() {
                               )}
                             </div>
 
-                            {/* End Date Column */}
                             <div 
                               className="col date-col"
                               onMouseEnter={() => setHoveredTaskId(task.id)}
@@ -754,12 +760,12 @@ function App() {
                             >
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', alignItems: 'stretch' }}>
                                 <div className={`cell-input ${task.endDate === reportDate ? 'date-highlight-red' : ''}`}>
-                                  <input type="date" value={task.endDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'endDate', e.target.value) : t))} className="clean-input date-input" />
+                                  <input type="date" value={task.endDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'endDate', e.target.value) : t))} className="clean-input date-input" />
                                 </div>
                                 {displayOrigEnd && (
                                   <div style={{ display: 'flex', alignItems: 'center', fontSize: '10px', background: '#f1f5f9', borderRadius: '4px', padding: '1px 4px', border: '1px dashed #cbd5e1' }}>
                                     <span style={{ marginRight: '4px', fontWeight: 'bold', color: '#64748b' }}>O:</span>
-                                    <input type="date" value={task.origEndDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => setTasks(tasks.map(t => t.id === task.id ? updateOrigDates(t, 'origEndDate', e.target.value) : t))} className="clean-input date-input" style={{ fontSize: '10px', color: '#475569', padding: '0', background: 'transparent' }} />
+                                    <input type="date" value={task.origEndDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => syncTasks(tasks.map(t => t.id === task.id ? updateOrigDates(t, 'origEndDate', e.target.value) : t))} className="clean-input date-input" style={{ fontSize: '10px', color: '#475569', padding: '0', background: 'transparent' }} />
                                   </div>
                                 )}
                               </div>
