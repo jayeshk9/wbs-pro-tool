@@ -28,6 +28,7 @@ function App() {
   const [focusId, setFocusId] = useState(null);
   const [activeMenu, setActiveMenu] = useState(null);
   const [hoveredTaskId, setHoveredTaskId] = useState(null);
+  const [showOriginal, setShowOriginal] = useState(false);
 
   // Filter States
   const [filterSupervisors, setFilterSupervisors] = useState([]);
@@ -70,6 +71,19 @@ function App() {
     const handleClick = () => setActiveMenu(null);
     window.addEventListener('click', handleClick);
     return () => window.removeEventListener('click', handleClick);
+  }, []);
+
+  // Alt+D (Option+D on Mac) toggles the original-dates view. e.code stays 'KeyD'
+  // even when Option rewrites e.key to a special glyph on macOS.
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.altKey && e.code === 'KeyD') {
+        e.preventDefault();
+        setShowOriginal(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
   }, []);
 
   // 3. AUTO-CAPITALIZE HELPER
@@ -486,6 +500,7 @@ function App() {
               <input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} />
             </div>
             <div className="bulk-actions">
+              <button className={`secondary-btn orig-toggle-btn ${showOriginal ? 'toggle-active' : ''}`} title="Alt + D" onClick={() => setShowOriginal(p => !p)}>{showOriginal ? 'Hide Original' : 'Show Original'}</button>
               <button className="secondary-btn print-btn" onClick={exportToPDF}>Print PDF</button>
               <button className="secondary-btn" onClick={() => syncTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
               <button className="secondary-btn" onClick={() => syncTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
@@ -577,7 +592,7 @@ function App() {
           copy.splice(dIdx > sIdx ? dIdx - blockSize + 1 : dIdx, 0, ...block);
           syncTasks(copy);
         }}>
-          <div className="wbs-table">
+          <div className={`wbs-table ${showOriginal ? 'show-original' : ''}`}>
             <div className="wbs-row header-row">
               <div className="col drag-handle-placeholder"></div>
               <div className="col num-col">WBS</div>
@@ -612,9 +627,9 @@ function App() {
                     const isZoneHovered = hoveredTaskId === task.id;
                     const hasBaseline = !!(task.origStartDate || task.origDays || task.origEndDate);
 
-                    const displayOrigStart = isZoneHovered || (task.origStartDate && task.origStartDate !== task.startDate);
-                    const displayOrigDays = isZoneHovered || (task.origDays && String(task.origDays) !== String(task.days));
-                    const displayOrigEnd = isZoneHovered || (task.origEndDate && task.origEndDate !== task.endDate);
+                    const displayOrigStart = showOriginal && task.origStartDate != null && task.origStartDate !== '';
+                    const displayOrigDays = showOriginal && task.origDays != null && task.origDays !== '';
+                    const displayOrigEnd = showOriginal && task.origEndDate != null && task.origEndDate !== '';
 
                     const totTarget = parseFloat(task.totalTarget) || 0;
                     const countDays = parseFloat(task.days) || 0;
@@ -729,12 +744,12 @@ function App() {
                                 )}
                               </div>
 
-                              {isZoneHovered && (
-                                <button 
+                              {showOriginal && isZoneHovered && (
+                                <button
                                   className="baseline-hover-btn"
                                   style={{
                                     position: 'absolute', left: '50%', transform: 'translateX(-50%)',
-                                    top: '2px', zIndex: 10, background: hasBaseline ? '#dc2626' : '#2563eb',
+                                    top: '5px', zIndex: 10, background: hasBaseline ? '#dc2626' : '#2563eb',
                                     color: '#ffffff', border: 'none', borderRadius: '4px', padding: '1px 5px',
                                     fontSize: '9px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
                                     whiteSpace: 'nowrap'

@@ -94,9 +94,12 @@ input[type="number"] {
 
 .secondary-btn {
   background: white; border: 1px solid var(--border); padding: 7px 15px;
-  border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 600; 
+  border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 600;
   color: #4b5563; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
+.secondary-btn.toggle-active { background: var(--primary); color: #fff; border-color: var(--primary); }
+/* Fixed width so the button doesn't resize when its label flips Show <-> Hide */
+.orig-toggle-btn { min-width: 132px; text-align: center; }
 
 .wbs-container { 
   background: white; border-radius: 10px; border: 1px solid var(--border); 
@@ -195,6 +198,20 @@ input[type="number"] {
 .day-input-field { text-align: center; padding: 0; }
 .date-input { font-size: 12px; }
 
+/* Show Original mode: reserve a fixed taller row so toggling/hovering never resizes rows (no jitter).
+   Raise --input-offset for EVERY box uniformly so all input tops stay aligned, while opening a
+   top band for the in-row Set/Delete Original button above the date/day inputs. */
+.show-original { --input-offset: 24px; }
+.show-original .wbs-row { min-height: 100px; }
+.show-original .date-col .cell-input,
+.show-original .day-col .cell-input {
+  margin-bottom: 5px; /* pulls the original value pill up, closer to the current input */
+}
+/* Keep the WBS number / drag glyph in step with the shifted boxes (they use a hardcoded offset). */
+.show-original .num-col,
+.show-original .drag-handle { padding-top: 28px; }
+.baseline-hover-btn { line-height: 1.2; }
+
 /* Fraction Layout Top/Bottom Styling */
 .fraction-status-layout {
   display: flex;
@@ -212,14 +229,14 @@ input[type="number"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 20px;
+  height: 21px;
   position: relative;
 }
 
 .fraction-divider {
   height: 1px;
   background: var(--border);
-  margin: 1px 15%;
+  margin: 0 15%;
 }
 
 .fraction-denominator {
@@ -227,12 +244,12 @@ input[type="number"] {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  height: 20px;
+  height: 21px;
 }
 
 .fraction-sub-input {
-  width: 38px;
-  height: 20px;
+  width: 48px;
+  height: 21px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: white;
@@ -240,7 +257,7 @@ input[type="number"] {
   margin: 0;
   outline: none;
   font-family: var(--font-main);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-color);
   text-align: center;
 }
