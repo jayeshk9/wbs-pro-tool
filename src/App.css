@@ -156,10 +156,10 @@ input[type="number"] {
 .num-col { width: 80px; font-weight: 800; color: #4b5563; padding-top: 18px; justify-content: flex-start; font-size: 13px; }
 .task-col { width: 450px; }
 .assigned-col { width: 170px; }
-.status-col { width: 170px; } 
-.date-col { width: 140px; }   
-.day-col { width: 70px; } 
-.remarks-col { flex: 1; min-width: 150px; border-right: 1px solid var(--grid-line); }
+.status-col { width: 220px; }
+.date-col { width: 140px; }
+.day-col { width: 70px; }
+.remarks-col { flex: 1; min-width: 100px; border-right: 1px solid var(--grid-line); }
 .action-col { width: 45px; justify-content: center; border-right: none; align-items: center; padding-top: 0; flex-shrink: 0; }
 
 .task-input-wrapper { width: 100%; padding-top: var(--input-offset); display: flex; align-items: center; }
@@ -212,40 +212,98 @@ input[type="number"] {
 .show-original .drag-handle { padding-top: 28px; }
 .baseline-hover-btn { line-height: 1.2; }
 
-/* Fraction Layout Top/Bottom Styling */
+/* Fraction Layout — 3-column grid (fits in default 72px row height) */
 .fraction-status-layout {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: space-between;
   width: 100%;
   height: 44px;
   margin-top: var(--input-offset);
   margin-bottom: 12px;
-  background: transparent;
-  border: none;
 }
 
-.fraction-numerator {
+.frac-grid {
+  display: grid;
+  grid-template-columns: 42px 8px 1fr 8px 42px;
+  align-items: center;
+  width: 100%;
+  height: 20px;
+}
+
+.frac-op {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  text-align: center;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 21px;
-  position: relative;
+}
+
+.frac-cell {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 2px;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* All grid inputs same width; today narrowed so (exp.X) fits inline */
+.frac-grid .fraction-sub-input { width: 38px; height: 20px; }
+.frac-tod-cell .fraction-sub-input { width: 30px; }
+
+.frac-exp-day {
+  font-size: 12px;
+  color: #64748b;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.frac-total-val {
+  font-size: 11px;
+  font-weight: 700;
+  color: #374151;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.frac-due-val {
+  font-size: 12px;
+  color: #64748b;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .fraction-divider {
   height: 1px;
   background: var(--border);
-  margin: 0 15%;
+  margin: 0;
+  flex-shrink: 0;
 }
 
-.fraction-denominator {
+.frac-close-btn {
+  background: #fee2e2;
+  color: #ef4444;
+  border: none;
+  border-radius: 4px;
+  width: 18px;
+  height: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  height: 21px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: bold;
 }
+.frac-close-btn:hover {
+  background: #fca5a5;
+  color: #991b1b;
+}
+
 
 .fraction-sub-input {
   width: 48px;
