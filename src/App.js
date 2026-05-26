@@ -166,10 +166,10 @@ function App() {
       if (task.statusType === 'fraction') {
         statusText = ''; 
       } else {
-        if (task.status === 'stuck') statusText = `!!! STUCK !!!`;
-        else if (task.status === 'completed') statusText = `[V] COMPLETED`;
-        else if (task.status === 'in progress') statusText = `[>] IN PROGRESS`;
-        else if (task.status === 'to be started') statusText = `[-] TO BE STARTED`;
+        if (task.status === 'stuck') statusText = 'STUCK';
+        else if (task.status === 'completed') statusText = 'COMPLETED';
+        else if (task.status === 'in progress') statusText = 'IN PROGRESS';
+        else if (task.status === 'to be started') statusText = 'TO BE STARTED';
         else statusText = '-';
       }
 
@@ -213,7 +213,7 @@ function App() {
         0: { cellWidth: 15 },
         1: { cellWidth: 65 },
         2: { cellWidth: 35 },
-        3: { cellWidth: 30, halign: 'center' }, 
+        3: { cellWidth: 50, halign: 'center' },
         4: { cellWidth: 20, halign: 'center' }, 
         5: { cellWidth: 12, halign: 'center' }, 
         6: { cellWidth: 20, halign: 'center' }, 
@@ -249,11 +249,12 @@ function App() {
           } else if (data.column.index === 3 && task.statusType !== 'fraction') {
             if (task.status === 'completed') {
               data.cell.styles.fontStyle = 'italic';
-              data.cell.styles.textColor = [0, 0, 0]; 
+              data.cell.styles.textColor = [0, 0, 0];
             } else if (task.status === 'in progress') {
               data.cell.styles.fontStyle = 'bold';
             }
           }
+
         }
       },
       willDrawCell: (data) => {
@@ -283,15 +284,27 @@ function App() {
             const tod = parseFloat(task.today) || 0;
             const tot = parseFloat(task.totalTarget) || 0;
             const workingDays = parseFloat(task.days) || 0;
-            const expDelta = (tot > 0 && workingDays > 0) ? (tot / workingDays).toFixed(1) : '-';
+            const expRate = (tot > 0 && workingDays > 0) ? tot / workingDays : 0;
+            const expDelta = expRate > 0 ? expRate.toFixed(1) : '-';
+            const total = yest + tod;
 
-            const line1 = `${yest} + ${tod}`;
-            const line2 = `${tot} (Exp: ${expDelta})`;
+            let expToday = '-';
+            if (task.startDate && tot > 0 && workingDays > 0) {
+              const startD = new Date(task.startDate);
+              const reportD = new Date(reportDate);
+              const daysFromStart = Math.floor((reportD - startD) / (1000 * 60 * 60 * 24)) + 1;
+              expToday = daysFromStart > 0
+                ? Math.min(daysFromStart * expRate, tot).toFixed(1)
+                : '0';
+            }
+
+            const line1 = `${yest}+${tod}(exp.${expDelta}/d)=${total}`;
+            const line2 = `${tot}  (Due: ${expToday})`;
 
             doc.setDrawColor(0, 0, 0);
             doc.setLineWidth(0.15);
             const midY = data.cell.y + (data.cell.height / 2);
-            doc.line(data.cell.x + 2, midY, data.cell.x + data.cell.width - 2, midY); 
+            doc.line(data.cell.x + 2, midY, data.cell.x + data.cell.width - 2, midY);
 
             doc.setFontSize(7);
             doc.setFont('helvetica', 'normal');
@@ -303,7 +316,7 @@ function App() {
 
             doc.text(line1, centerX, centerY1, { align: 'center', baseline: 'middle' });
             doc.text(line2, centerX, centerY2, { align: 'center', baseline: 'middle' });
-            return; 
+            return;
           }
           
           let hasDiff = false;
@@ -328,7 +341,7 @@ function App() {
             const isStartHighlight = task.startDate === reportDate;
             const isEndHighlight = task.endDate === reportDate;
             const isHighlighted = (colIdx === 4 && isStartHighlight) || (colIdx === 6 && isEndHighlight);
-            
+
             if (isHighlighted) {
               doc.setDrawColor(255, 255, 255);
             } else {
@@ -337,22 +350,21 @@ function App() {
             doc.setLineWidth(0.15);
             const midY = data.cell.y + (data.cell.height / 2);
             doc.line(data.cell.x, midY, data.cell.x + data.cell.width, midY);
-            
+
             doc.setFontSize(data.cell.styles.fontSize || 7);
-            const fontStyle = data.cell.styles.fontStyle || 'normal';
-            doc.setFont('helvetica', fontStyle);
-            
+            doc.setFont('helvetica', 'normal');
+
             const textColor = data.cell.styles.textColor;
             if (Array.isArray(textColor)) {
               doc.setTextColor(textColor[0], textColor[1], textColor[2]);
             } else {
               doc.setTextColor(0, 0, 0);
             }
-            
+
             const centerX = data.cell.x + data.cell.width / 2;
             const centerY1 = data.cell.y + (data.cell.height / 4);
             const centerY2 = data.cell.y + (3 * data.cell.height / 4);
-            
+
             doc.text(line1, centerX, centerY1, { align: 'center', baseline: 'middle' });
             doc.text(line2, centerX, centerY2, { align: 'center', baseline: 'middle' });
           }
@@ -633,7 +645,18 @@ function App() {
 
                     const totTarget = parseFloat(task.totalTarget) || 0;
                     const countDays = parseFloat(task.days) || 0;
-                    const expectedDelta = (totTarget > 0 && countDays > 0) ? (totTarget / countDays).toFixed(1) : '-';
+                    const expRate = (totTarget > 0 && countDays > 0) ? totTarget / countDays : 0;
+                    const expectedDelta = expRate > 0 ? expRate.toFixed(1) : '-';
+                    const currentTotal = (parseFloat(task.tillYest) || 0) + (parseFloat(task.today) || 0);
+                    let expTodayDisplay = '-';
+                    if (task.startDate && totTarget > 0 && countDays > 0) {
+                      const startD = new Date(task.startDate);
+                      const reportD = new Date(reportDate);
+                      const daysFromStart = Math.floor((reportD - startD) / (1000 * 60 * 60 * 24)) + 1;
+                      expTodayDisplay = daysFromStart > 0
+                        ? Math.min(daysFromStart * expRate, totTarget).toFixed(1)
+                        : '0';
+                    }
 
                     return (
                       <Draggable key={task.id} draggableId={task.id} index={fIndex} isDragDisabled={isFilterActive}>
@@ -675,16 +698,29 @@ function App() {
                             <div className="col status-col">
                               {task.statusType === 'fraction' ? (
                                 <div className="fraction-status-layout">
-                                  <div className="fraction-numerator">
-                                    <input type="number" value={task.tillYest || ''} title="Till Yesterday Progress" onChange={(e) => toggleSelection(task.id, 'tillYest', e.target.value)} placeholder="Yest" className="fraction-sub-input" />
-                                    <span className="fraction-operator">+</span>
-                                    <input type="number" value={task.today || ''} title="Today Progress" onChange={(e) => toggleSelection(task.id, 'today', e.target.value)} placeholder="Tod" className="fraction-sub-input" />
-                                    <button className="status-mode-toggle-btn" title="Close Tracking" onClick={() => toggleSelection(task.id, 'statusType', 'text')}>×</button>
+                                  <div className="frac-grid">
+                                    <div className="frac-cell">
+                                      <input type="number" value={task.tillYest || ''} title="Till Yesterday" onChange={(e) => toggleSelection(task.id, 'tillYest', e.target.value)} placeholder="Yest" className="fraction-sub-input" />
+                                    </div>
+                                    <div className="frac-op">+</div>
+                                    <div className="frac-cell frac-tod-cell">
+                                      <input type="number" value={task.today || ''} title="Today" onChange={(e) => toggleSelection(task.id, 'today', e.target.value)} placeholder="Tod" className="fraction-sub-input" />
+                                      <span className="frac-exp-day">(exp.{expectedDelta})</span>
+                                    </div>
+                                    <div className="frac-op">=</div>
+                                    <div className="frac-cell frac-total-val">{currentTotal}</div>
                                   </div>
                                   <div className="fraction-divider"></div>
-                                  <div className="fraction-denominator">
-                                    <input type="number" value={task.totalTarget || ''} title="Total Target Quantity" onChange={(e) => toggleSelection(task.id, 'totalTarget', e.target.value)} placeholder="Tot" className="fraction-sub-input font-bold" />
-                                    <span className="delta-value">(Exp: {expectedDelta})</span>
+                                  <div className="frac-grid">
+                                    <div className="frac-cell">
+                                      <button className="frac-close-btn" title="Close Tracking" onClick={() => toggleSelection(task.id, 'statusType', 'text')}>×</button>
+                                    </div>
+                                    <div></div>
+                                    <div className="frac-cell frac-due-val">(Due: {expTodayDisplay})</div>
+                                    <div></div>
+                                    <div className="frac-cell">
+                                      <input type="number" value={task.totalTarget || ''} title="Total Target" onChange={(e) => toggleSelection(task.id, 'totalTarget', e.target.value)} placeholder="Target" className="fraction-sub-input" />
+                                    </div>
                                   </div>
                                 </div>
                               ) : (
