@@ -132,13 +132,27 @@ input[type="number"] {
   cursor: pointer;
   border-bottom: 1px solid var(--grid-line);
   transition: background 0.1s;
+  gap: 12px;
 }
 .history-item:last-child { border-bottom: none; }
 .history-item:hover { background: #f8fafc; }
 .history-item-active { background: #eff6ff; }
 .history-item-active:hover { background: #dbeafe; }
+.history-item-info { flex: 1; min-width: 0; }
 .history-item-report { font-size: 14px; font-weight: 600; color: #111827; }
 .history-item-saved { font-size: 12px; color: #6b7280; }
+.history-delete-btn {
+  background: none;
+  border: none;
+  font-size: 15px;
+  cursor: pointer;
+  opacity: 0.4;
+  padding: 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.history-delete-btn:hover { opacity: 1; background: #fee2e2; }
 
 /* Filter Bar Styles */
 .filter-bar {

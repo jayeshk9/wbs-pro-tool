@@ -3,7 +3,7 @@ import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { db } from './firebase';
-import { doc, onSnapshot, setDoc, collection, addDoc, getDocs, query, orderBy } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, collection, addDoc, getDocs, query, orderBy, deleteDoc } from 'firebase/firestore';
 import './App.css';
 
 const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh C.", "Lokesh", "Jay", "Mahender","Anil"];
@@ -92,6 +92,18 @@ function App() {
       console.error('Failed to load history:', e);
     }
     setHistoryLoading(false);
+  };
+
+  const deleteVersion = async (e, versionId) => {
+    e.stopPropagation();
+    if (!window.confirm('Delete this snapshot?')) return;
+    try {
+      await deleteDoc(doc(db, 'versions', versionId));
+      setHistoryVersions(prev => prev.filter(v => v.id !== versionId));
+      if (viewingVersion?.id === versionId) setViewingVersion(null);
+    } catch (err) {
+      console.error('Failed to delete version:', err);
+    }
   };
 
   useEffect(() => {
@@ -549,8 +561,8 @@ function App() {
               <button className={`secondary-btn orig-toggle-btn ${showOriginal ? 'toggle-active' : ''}`} title="Alt + D" onClick={() => setShowOriginal(p => !p)}>{showOriginal ? 'Hide Original' : 'Show Original'}</button>
               <button className="secondary-btn history-btn" onClick={() => { setShowHistory(true); loadHistory(); }}>History</button>
               <button className="secondary-btn print-btn" onClick={exportToPDF}>Print PDF</button>
-              <button className="secondary-btn" onClick={() => syncTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
-              <button className="secondary-btn" onClick={() => syncTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
+              <button className="secondary-btn" onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: true}))})) : syncTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
+              <button className="secondary-btn" onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: false}))})) : syncTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
               <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && syncTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', statusType: 'text', tillYest: '', today: '', totalTarget: '', origStartDate: '', origDays: '', origEndDate: '' }])}>Clear All</button>
             </div>
           </div>
@@ -636,9 +648,10 @@ function App() {
       <div className="wbs-container">
         <DragDropContext onDragEnd={(result) => {
           if (!result.destination) return;
+          if (viewingVersion) return;
           const sIdx = result.source.index;
           const dIdx = result.destination.index;
-          if (isFilterActive) return; 
+          if (isFilterActive) return;
 
           const blockSize = (tasks[sIdx].isCollapsed ? getSubtaskRange(sIdx) : sIdx) - sIdx + 1;
           const copy = [...tasks];
@@ -702,7 +715,7 @@ function App() {
                     }
 
                     return (
-                      <Draggable key={task.id} draggableId={task.id} index={fIndex} isDragDisabled={isFilterActive}>
+                      <Draggable key={task.id} draggableId={task.id} index={fIndex} isDragDisabled={isFilterActive || !!viewingVersion}>
                         {(provided) => (
                           <div ref={provided.innerRef} {...provided.draggableProps} onKeyDown={(e) => handleKeyDown(e, originalIndex)} className={`wbs-row level-${task.level} ${showBlueAccent ? 'blue-accent' : ''} ${isMenuOpen ? 'z-top' : ''}`}>
                             <div {...provided.dragHandleProps} className="col drag-handle">⠿</div>
@@ -713,7 +726,7 @@ function App() {
 
                             <div className="col task-col">
                               <div className="task-input-wrapper" style={{ paddingLeft: `${task.level * 24}px` }}>
-                                <button className={`collapse-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} onClick={() => toggleSelection(task.id, 'isCollapsed', !task.isCollapsed)}>
+                                <button className={`collapse-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => t.id === task.id ? {...t, isCollapsed: !t.isCollapsed} : t)})) : toggleSelection(task.id, 'isCollapsed', !task.isCollapsed)}>
                                   {task.isCollapsed ? '▶' : '▼'}
                                 </button>
                                 <input type="text" autoFocus={task.id === focusId} value={task.text} onFocus={() => setFocusId(task.id)} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => !isReadOnly && toggleSelection(task.id, 'text', e.target.value)} className="task-input-field" placeholder="Task name..." readOnly={isReadOnly} />
@@ -723,13 +736,13 @@ function App() {
                             <div className="col assigned-col">
                               <div className="cell-input popover-trigger">
                                 <div className="names-display">{task.assignedTo?.join('\n') || '-'}</div>
-                                {!isReadOnly && <button className="add-icon" onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.id === task.id && activeMenu?.type === 'assign' ? null : {id: task.id, type: 'assign'}); }}>+</button>}
+                                <button className="add-icon" onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.id === task.id && activeMenu?.type === 'assign' ? null : {id: task.id, type: 'assign'}); }}>+</button>
                                 {activeMenu?.id === task.id && activeMenu?.type === 'assign' && (
                                   <div className="popover-menu" onClick={e => e.stopPropagation()}>
                                     <div className="menu-scroll">
                                       {ASSIGNED_OPTIONS.map(opt => (
                                         <label key={opt} className="menu-item">
-                                          <input type="checkbox" checked={task.assignedTo.includes(opt)} onChange={() => toggleSelection(task.id, 'assignedTo', opt)} /> {opt}
+                                          <input type="checkbox" checked={task.assignedTo.includes(opt)} onChange={() => !isReadOnly && toggleSelection(task.id, 'assignedTo', opt)} disabled={isReadOnly} /> {opt}
                                         </label>
                                       ))}
                                     </div>
@@ -772,6 +785,7 @@ function App() {
                                     value={task.status} 
                                     onKeyDown={(e) => handleKeyDown(e, originalIndex)} 
                                     onChange={(e) => {
+                                      if (isReadOnly) return;
                                       if (e.target.value === 'fraction') {
                                         toggleSelection(task.id, 'statusType', 'fraction');
                                       } else {
@@ -823,7 +837,7 @@ function App() {
                                 )}
                               </div>
 
-                              {showOriginal && isZoneHovered && (
+                              {showOriginal && isZoneHovered && !isReadOnly && (
                                 <button
                                   className="baseline-hover-btn"
                                   style={{
@@ -923,8 +937,11 @@ function App() {
                     className={`history-item ${viewingVersion?.id === v.id ? 'history-item-active' : ''}`}
                     onClick={() => { setViewingVersion(v); setShowHistory(false); }}
                   >
-                    <div className="history-item-report">Report {formatDateShort(v.reportDate)}</div>
-                    <div className="history-item-saved">Saved {new Date(v.savedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                    <div className="history-item-info">
+                      <div className="history-item-report">Report {formatDateShort(v.reportDate)}</div>
+                      <div className="history-item-saved">Saved {new Date(v.savedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                    </div>
+                    <button className="history-delete-btn" title="Delete snapshot" onClick={(e) => deleteVersion(e, v.id)}>🗑</button>
                   </div>
                 ))
               )}
