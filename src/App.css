@@ -46,6 +46,100 @@ input[type="number"] {
 
 .bulk-actions { display: flex; gap: 8px; }
 
+/* Snapshot banner */
+.snapshot-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #fefce8;
+  border: 1px solid #fbbf24;
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #78350f;
+  font-weight: 500;
+}
+.snapshot-back-btn {
+  background: #f59e0b;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.snapshot-back-btn:hover { background: #d97706; }
+
+/* History modal */
+.history-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.history-modal {
+  background: white;
+  border-radius: 12px;
+  width: 480px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+  overflow: hidden;
+}
+.history-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.history-modal-header h2 { font-size: 16px; font-weight: 700; color: #111827; margin: 0; }
+.history-close-btn {
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: #6b7280;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+.history-close-btn:hover { color: #111827; }
+.history-modal-body {
+  overflow-y: auto;
+  flex: 1;
+  padding: 8px 0;
+}
+.history-empty {
+  padding: 32px 20px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
+}
+.history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--grid-line);
+  transition: background 0.1s;
+}
+.history-item:last-child { border-bottom: none; }
+.history-item:hover { background: #f8fafc; }
+.history-item-active { background: #eff6ff; }
+.history-item-active:hover { background: #dbeafe; }
+.history-item-report { font-size: 14px; font-weight: 600; color: #111827; }
+.history-item-saved { font-size: 12px; color: #6b7280; }
+
 /* Filter Bar Styles */
 .filter-bar {
   background: white;

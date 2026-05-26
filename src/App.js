@@ -3,7 +3,7 @@ import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { db } from './firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, collection, addDoc, getDocs, query, orderBy } from 'firebase/firestore';
 import './App.css';
 
 const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh C.", "Lokesh", "Jay", "Mahender","Anil"];
@@ -29,6 +29,10 @@ function App() {
   const [activeMenu, setActiveMenu] = useState(null);
   const [hoveredTaskId, setHoveredTaskId] = useState(null);
   const [showOriginal, setShowOriginal] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyVersions, setHistoryVersions] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [viewingVersion, setViewingVersion] = useState(null);
 
   // Filter States
   const [filterSupervisors, setFilterSupervisors] = useState([]);
@@ -67,6 +71,29 @@ function App() {
     setDoc(doc(db, 'projects', PROJECT_DOC), { tasks: newTasks }, { merge: true }); // Sync to cloud
   };
 
+  const saveVersion = async (tasksSnapshot, reportDateSnapshot) => {
+    try {
+      await addDoc(collection(db, 'versions'), {
+        savedAt: new Date().toISOString(),
+        reportDate: reportDateSnapshot,
+        tasks: tasksSnapshot,
+      });
+    } catch (e) {
+      console.error('Failed to save version:', e);
+    }
+  };
+
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const snap = await getDocs(query(collection(db, 'versions'), orderBy('savedAt', 'desc')));
+      setHistoryVersions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (e) {
+      console.error('Failed to load history:', e);
+    }
+    setHistoryLoading(false);
+  };
+
   useEffect(() => {
     const handleClick = () => setActiveMenu(null);
     window.addEventListener('click', handleClick);
@@ -92,28 +119,28 @@ function App() {
     return str.charAt(0).toUpperCase() + str.slice(1);
   };
 
-  const getSubtaskRange = useCallback((index) => {
-    const parentLevel = tasks[index].level;
+  const getSubtaskRange = useCallback((index, taskArr = tasks) => {
+    const parentLevel = taskArr[index].level;
     let lastIndex = index;
-    for (let i = index + 1; i < tasks.length; i++) {
-      if (tasks[i].level > parentLevel) lastIndex = i;
+    for (let i = index + 1; i < taskArr.length; i++) {
+      if (taskArr[i].level > parentLevel) lastIndex = i;
       else break;
     }
     return lastIndex;
   }, [tasks]);
 
-  const generateWBSString = (index) => {
+  const generateWBSString = (index, taskArr = tasks) => {
     let counters = [0, 0, 0, 0, 0, 0], prev = -1;
     for (let i = 0; i <= index; i++) {
-      if (tasks[i].level > prev) {
-        counters.fill(0, tasks[i].level);
-        counters[tasks[i].level] = 1;
+      if (taskArr[i].level > prev) {
+        counters.fill(0, taskArr[i].level);
+        counters[taskArr[i].level] = 1;
       } else {
-        counters[tasks[i].level]++;
+        counters[taskArr[i].level]++;
       }
-      prev = tasks[i].level;
+      prev = taskArr[i].level;
     }
-    return counters.slice(0, tasks[index].level + 1).join('.');
+    return counters.slice(0, taskArr[index].level + 1).join('.');
   };
 
   const formatDateShort = (dateStr) => {
@@ -122,8 +149,11 @@ function App() {
     return `${d}/${m}/${y.slice(-2)}`;
   };
 
+  const displayTasks = viewingVersion ? viewingVersion.tasks : tasks;
+  const displayReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
+
   const filteredTasks = useMemo(() => {
-    return tasks.map((task, originalIndex) => ({ ...task, originalIndex })).filter(task => {
+    return displayTasks.map((task, originalIndex) => ({ ...task, originalIndex })).filter(task => {
       const matchSup = filterSupervisors.length === 0 || task.assignedTo.some(s => filterSupervisors.includes(s));
       let matchStatus = true;
       if (filterStatuses.length > 0) {
@@ -137,7 +167,7 @@ function App() {
       }
       return matchSup && matchStatus && matchLevel && matchDate;
     });
-  }, [tasks, filterSupervisors, filterStatuses, filterLevels, filterDateRange]);
+  }, [displayTasks, filterSupervisors, filterStatuses, filterLevels, filterDateRange]);
 
   const isFilterActive = filterSupervisors.length > 0 || filterStatuses.length > 0 || filterLevels.length > 0 || (filterDateRange.start && filterDateRange.end);
 
@@ -149,16 +179,19 @@ function App() {
   };
 
   const exportToPDF = () => {
+    const effectiveTasks = viewingVersion ? viewingVersion.tasks : tasks;
+    const effectiveReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
+
     const doc = new jsPDF('l', 'mm', 'a4');
-    const todayStr = formatDateShort(reportDate);
+    const todayStr = formatDateShort(effectiveReportDate);
 
     doc.setFontSize(16);
     doc.text("Ajmer Estate Project Report", 14, 15);
     doc.setFontSize(10);
     doc.text(`Date: ${todayStr}`, 14, 22);
 
-    const tableData = tasks.map((task, index) => {
-      const wbsNum = generateWBSString(index);
+    const tableData = effectiveTasks.map((task, index) => {
+      const wbsNum = generateWBSString(index, effectiveTasks);
       const taskText = task.text; // Already capitalized in state now
       const indent = "        ".repeat(task.level); 
 
@@ -221,8 +254,8 @@ function App() {
       },
       didParseCell: (data) => {
         const taskIdx = data.row.index;
-        const task = tasks[taskIdx];
-        
+        const task = effectiveTasks[taskIdx];
+
         if (data.section === 'body') {
           if (task.level === 0) {
             data.cell.styles.fontStyle = 'bold';
@@ -237,8 +270,8 @@ function App() {
             data.cell.styles.fillColor = [228, 228, 228]; 
           }
           
-          const isStartHighlight = task.startDate === reportDate;
-          const isEndHighlight = task.endDate === reportDate;
+          const isStartHighlight = task.startDate === effectiveReportDate;
+          const isEndHighlight = task.endDate === effectiveReportDate;
           const isDateColumnHighlighted = (data.column.index === 4 && isStartHighlight) || (data.column.index === 6 && isEndHighlight);
           const isStuckStatusColumn = (data.column.index === 3 && task.statusType !== 'fraction' && task.status === 'stuck');
 
@@ -260,7 +293,7 @@ function App() {
       willDrawCell: (data) => {
         if (data.section === 'body') {
           const taskIdx = data.row.index;
-          const task = tasks[taskIdx];
+          const task = effectiveTasks[taskIdx];
           const colIdx = data.column.index;
           
           let hasDiff = false;
@@ -276,7 +309,7 @@ function App() {
       didDrawCell: (data) => {
         if (data.section === 'body') {
           const taskIdx = data.row.index;
-          const task = tasks[taskIdx];
+          const task = effectiveTasks[taskIdx];
           const colIdx = data.column.index;
 
           if (colIdx === 3 && task.statusType === 'fraction') {
@@ -291,7 +324,7 @@ function App() {
             let expToday = '-';
             if (task.startDate && tot > 0 && workingDays > 0) {
               const startD = new Date(task.startDate);
-              const reportD = new Date(reportDate);
+              const reportD = new Date(effectiveReportDate);
               const daysFromStart = Math.floor((reportD - startD) / (1000 * 60 * 60 * 24)) + 1;
               expToday = daysFromStart > 0
                 ? Math.min(daysFromStart * expRate, tot).toFixed(1)
@@ -372,7 +405,8 @@ function App() {
       }
     });
 
-    doc.save(`WBS_Report_${reportDate}.pdf`);
+    doc.save(`WBS_Report_${effectiveReportDate}.pdf`);
+    if (!viewingVersion) saveVersion(tasks, reportDate);
   };
 
   const updateDates = (task, field, value) => {
@@ -513,6 +547,7 @@ function App() {
             </div>
             <div className="bulk-actions">
               <button className={`secondary-btn orig-toggle-btn ${showOriginal ? 'toggle-active' : ''}`} title="Alt + D" onClick={() => setShowOriginal(p => !p)}>{showOriginal ? 'Hide Original' : 'Show Original'}</button>
+              <button className="secondary-btn history-btn" onClick={() => { setShowHistory(true); loadHistory(); }}>History</button>
               <button className="secondary-btn print-btn" onClick={exportToPDF}>Print PDF</button>
               <button className="secondary-btn" onClick={() => syncTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
               <button className="secondary-btn" onClick={() => syncTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
@@ -520,6 +555,13 @@ function App() {
             </div>
           </div>
         </div>
+
+        {viewingVersion && (
+          <div className="snapshot-banner">
+            <span>Viewing snapshot — Report {formatDateShort(viewingVersion.reportDate)} &nbsp;·&nbsp; saved {new Date(viewingVersion.savedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+            <button className="snapshot-back-btn" onClick={() => setViewingVersion(null)}>← Back to Live</button>
+          </div>
+        )}
 
         <div className="filter-bar">
           <div className="filter-group">
@@ -627,12 +669,13 @@ function App() {
                     if (!isFilterActive) {
                       let visible = true;
                       for (let i = 0; i < originalIndex; i++) {
-                        if (tasks[i].isCollapsed && originalIndex > i && originalIndex <= getSubtaskRange(i)) visible = false;
+                        if (displayTasks[i].isCollapsed && originalIndex > i && originalIndex <= getSubtaskRange(i, displayTasks)) visible = false;
                       }
                       if (!visible) return null;
                     }
 
-                    const hasChildren = originalIndex < tasks.length - 1 && tasks[originalIndex + 1].level > task.level;
+                    const hasChildren = originalIndex < displayTasks.length - 1 && displayTasks[originalIndex + 1].level > task.level;
+                    const isReadOnly = !!viewingVersion;
                     const isMenuOpen = activeMenu?.id === task.id;
                     const showBlueAccent = task.level === 0 || (hasChildren && task.isCollapsed);
 
@@ -651,7 +694,7 @@ function App() {
                     let expTodayDisplay = '-';
                     if (task.startDate && totTarget > 0 && countDays > 0) {
                       const startD = new Date(task.startDate);
-                      const reportD = new Date(reportDate);
+                      const reportD = new Date(displayReportDate);
                       const daysFromStart = Math.floor((reportD - startD) / (1000 * 60 * 60 * 24)) + 1;
                       expTodayDisplay = daysFromStart > 0
                         ? Math.min(daysFromStart * expRate, totTarget).toFixed(1)
@@ -665,7 +708,7 @@ function App() {
                             <div {...provided.dragHandleProps} className="col drag-handle">⠿</div>
                             
                             <div className="col num-col">
-                              {generateWBSString(originalIndex)}
+                              {generateWBSString(originalIndex, displayTasks)}
                             </div>
 
                             <div className="col task-col">
@@ -673,14 +716,14 @@ function App() {
                                 <button className={`collapse-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} onClick={() => toggleSelection(task.id, 'isCollapsed', !task.isCollapsed)}>
                                   {task.isCollapsed ? '▶' : '▼'}
                                 </button>
-                                <input type="text" autoFocus={task.id === focusId} value={task.text} onFocus={() => setFocusId(task.id)} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => toggleSelection(task.id, 'text', e.target.value)} className="task-input-field" placeholder="Task name..." />
+                                <input type="text" autoFocus={task.id === focusId} value={task.text} onFocus={() => setFocusId(task.id)} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => !isReadOnly && toggleSelection(task.id, 'text', e.target.value)} className="task-input-field" placeholder="Task name..." readOnly={isReadOnly} />
                               </div>
                             </div>
 
                             <div className="col assigned-col">
                               <div className="cell-input popover-trigger">
                                 <div className="names-display">{task.assignedTo?.join('\n') || '-'}</div>
-                                <button className="add-icon" onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.id === task.id && activeMenu?.type === 'assign' ? null : {id: task.id, type: 'assign'}); }}>+</button>
+                                {!isReadOnly && <button className="add-icon" onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.id === task.id && activeMenu?.type === 'assign' ? null : {id: task.id, type: 'assign'}); }}>+</button>}
                                 {activeMenu?.id === task.id && activeMenu?.type === 'assign' && (
                                   <div className="popover-menu" onClick={e => e.stopPropagation()}>
                                     <div className="menu-scroll">
@@ -700,11 +743,11 @@ function App() {
                                 <div className="fraction-status-layout">
                                   <div className="frac-grid">
                                     <div className="frac-cell">
-                                      <input type="number" value={task.tillYest || ''} title="Till Yesterday" onChange={(e) => toggleSelection(task.id, 'tillYest', e.target.value)} placeholder="Yest" className="fraction-sub-input" />
+                                      <input type="number" value={task.tillYest || ''} title="Till Yesterday" onChange={(e) => !isReadOnly && toggleSelection(task.id, 'tillYest', e.target.value)} placeholder="Yest" className="fraction-sub-input" readOnly={isReadOnly} />
                                     </div>
                                     <div className="frac-op">+</div>
                                     <div className="frac-cell frac-tod-cell">
-                                      <input type="number" value={task.today || ''} title="Today" onChange={(e) => toggleSelection(task.id, 'today', e.target.value)} placeholder="Tod" className="fraction-sub-input" />
+                                      <input type="number" value={task.today || ''} title="Today" onChange={(e) => !isReadOnly && toggleSelection(task.id, 'today', e.target.value)} placeholder="Tod" className="fraction-sub-input" readOnly={isReadOnly} />
                                       <span className="frac-exp-day">(exp.{expectedDelta})</span>
                                     </div>
                                     <div className="frac-op">=</div>
@@ -713,13 +756,13 @@ function App() {
                                   <div className="fraction-divider"></div>
                                   <div className="frac-grid">
                                     <div className="frac-cell">
-                                      <button className="frac-close-btn" title="Close Tracking" onClick={() => toggleSelection(task.id, 'statusType', 'text')}>×</button>
+                                      {!isReadOnly && <button className="frac-close-btn" title="Close Tracking" onClick={() => toggleSelection(task.id, 'statusType', 'text')}>×</button>}
                                     </div>
                                     <div></div>
                                     <div className="frac-cell frac-due-val">(Due: {expTodayDisplay})</div>
                                     <div></div>
                                     <div className="frac-cell">
-                                      <input type="number" value={task.totalTarget || ''} title="Total Target" onChange={(e) => toggleSelection(task.id, 'totalTarget', e.target.value)} placeholder="Target" className="fraction-sub-input" />
+                                      <input type="number" value={task.totalTarget || ''} title="Total Target" onChange={(e) => !isReadOnly && toggleSelection(task.id, 'totalTarget', e.target.value)} placeholder="Target" className="fraction-sub-input" readOnly={isReadOnly} />
                                     </div>
                                   </div>
                                 </div>
@@ -750,8 +793,8 @@ function App() {
                               onMouseLeave={() => setHoveredTaskId(null)}
                             >
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', alignItems: 'stretch' }}>
-                                <div className={`cell-input ${task.startDate === reportDate ? 'date-highlight-red' : ''}`}>
-                                  <input type="date" value={task.startDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'startDate', e.target.value) : t))} className="clean-input date-input" />
+                                <div className={`cell-input ${task.startDate === displayReportDate ? 'date-highlight-red' : ''}`}>
+                                  <input type="date" value={task.startDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => !isReadOnly && syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'startDate', e.target.value) : t))} className="clean-input date-input" readOnly={isReadOnly} />
                                 </div>
                                 {displayOrigStart && (
                                   <div style={{ display: 'flex', alignItems: 'center', fontSize: '10px', background: '#f1f5f9', borderRadius: '4px', padding: '1px 4px', border: '1px dashed #cbd5e1' }}>
@@ -770,7 +813,7 @@ function App() {
                             >
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', alignItems: 'stretch' }}>
                                 <div className="cell-input">
-                                  <input type="number" value={task.days || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'days', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" />
+                                  <input type="number" value={task.days || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => !isReadOnly && syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'days', e.target.value) : t))} className="clean-input center-text day-input-field" placeholder="0" readOnly={isReadOnly} />
                                 </div>
                                 {displayOrigDays && (
                                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', background: '#f1f5f9', borderRadius: '4px', padding: '1px 4px', border: '1px dashed #cbd5e1' }}>
@@ -810,8 +853,8 @@ function App() {
                               onMouseLeave={() => setHoveredTaskId(null)}
                             >
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', alignItems: 'stretch' }}>
-                                <div className={`cell-input ${task.endDate === reportDate ? 'date-highlight-red' : ''}`}>
-                                  <input type="date" value={task.endDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'endDate', e.target.value) : t))} className="clean-input date-input" />
+                                <div className={`cell-input ${task.endDate === displayReportDate ? 'date-highlight-red' : ''}`}>
+                                  <input type="date" value={task.endDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => !isReadOnly && syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'endDate', e.target.value) : t))} className="clean-input date-input" readOnly={isReadOnly} />
                                 </div>
                                 {displayOrigEnd && (
                                   <div style={{ display: 'flex', alignItems: 'center', fontSize: '10px', background: '#f1f5f9', borderRadius: '4px', padding: '1px 4px', border: '1px dashed #cbd5e1' }}>
@@ -823,18 +866,20 @@ function App() {
                             </div>
 
                             <div className="col remarks-col">
-                               <textarea 
-                                value={task.remarks} 
+                               <textarea
+                                value={task.remarks}
                                 onKeyDown={(e) => handleKeyDown(e, originalIndex)}
-                                onInput={(e) => handleRemarksInput(e, task.id)}
-                                className="remarks-textarea" 
+                                onInput={(e) => !isReadOnly && handleRemarksInput(e, task.id)}
+                                onChange={() => {}}
+                                className="remarks-textarea"
                                 placeholder="Notes..."
                                 rows="1"
+                                readOnly={isReadOnly}
                                />
                             </div>
 
                             <div className="col action-col">
-                               <button className="row-delete-btn" title="Ctrl + Shift + D" onClick={() => deleteTask(originalIndex)}>×</button>
+                               {!isReadOnly && <button className="row-delete-btn" title="Ctrl + Shift + D" onClick={() => deleteTask(originalIndex)}>×</button>}
                             </div>
                           </div>
                         )}
@@ -858,6 +903,35 @@ function App() {
           </div>
         </div>
       </div>
+
+      {showHistory && (
+        <div className="history-overlay" onClick={() => setShowHistory(false)}>
+          <div className="history-modal" onClick={e => e.stopPropagation()}>
+            <div className="history-modal-header">
+              <h2>Version History</h2>
+              <button className="history-close-btn" onClick={() => setShowHistory(false)}>×</button>
+            </div>
+            <div className="history-modal-body">
+              {historyLoading ? (
+                <div className="history-empty">Loading...</div>
+              ) : historyVersions.length === 0 ? (
+                <div className="history-empty">No saved versions yet. Print a PDF to create the first snapshot.</div>
+              ) : (
+                historyVersions.map(v => (
+                  <div
+                    key={v.id}
+                    className={`history-item ${viewingVersion?.id === v.id ? 'history-item-active' : ''}`}
+                    onClick={() => { setViewingVersion(v); setShowHistory(false); }}
+                  >
+                    <div className="history-item-report">Report {formatDateShort(v.reportDate)}</div>
+                    <div className="history-item-saved">Saved {new Date(v.savedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
