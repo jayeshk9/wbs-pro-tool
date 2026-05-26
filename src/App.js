@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -8,6 +8,8 @@ import './App.css';
 
 const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh C.", "Lokesh", "Jay", "Mahender","Anil"];
 const STATUS_OPTIONS = ["-", "to be started", "in progress", "completed", "stuck"];
+const ALL_STATUS_FILTER_OPTIONS = [...STATUS_OPTIONS, 'fraction'];
+const DEFAULT_STATUS_FILTER = ALL_STATUS_FILTER_OPTIONS.filter(s => s !== 'completed');
 const LEVEL_OPTIONS = [0, 1, 2, 3, 4, 5];
 
 function App() {
@@ -63,7 +65,7 @@ function App() {
 
   // Filter States
   const [filterSupervisors, setFilterSupervisors] = useState([]);
-  const [filterStatuses, setFilterStatuses] = useState([]);
+  const [filterStatuses, setFilterStatuses] = useState(DEFAULT_STATUS_FILTER);
   const [filterLevels, setFilterLevels] = useState([]);
   const [filterDateRange, setFilterDateRange] = useState({ start: '', end: '' });
 
@@ -180,11 +182,44 @@ function App() {
     return () => window.removeEventListener('click', handleClick);
   }, []);
 
+  // Ref always holds the latest closures for use in the stable keydown handler
+  const shortcutRef = useRef({});
+  useEffect(() => {
+    shortcutRef.current = {
+      handlePrintPDF, handleCombinedReport, loadHistory,
+      tasks, viewingVersion, projects, syncTasks,
+      setShowOriginal, setShowHistory, setViewingVersion, switchProject,
+    };
+  });
+
   useEffect(() => {
     const handleKey = (e) => {
-      if (e.altKey && e.code === 'KeyD') {
-        e.preventDefault();
-        setShowOriginal(prev => !prev);
+      if (!e.altKey || e.ctrlKey || e.shiftKey) return;
+      // No input guard — e.preventDefault() in each case prevents special chars (e.g. ð on Mac)
+      const r = shortcutRef.current;
+      // Alt+1–9 → switch to that project tab (e.code is platform-safe with modifier keys)
+      if (/^Digit[1-9]$/.test(e.code)) {
+        const p = r.projects[parseInt(e.code.slice(5)) - 1];
+        if (p) { e.preventDefault(); r.switchProject(p.id); }
+        return;
+      }
+      // Use e.code (physical key) not e.key — Option+letter on Mac produces special chars
+      switch (e.code) {
+        case 'KeyD': e.preventDefault(); r.setShowOriginal(v => !v); break;
+        case 'KeyH': e.preventDefault(); r.setShowHistory(true); r.loadHistory(); break;
+        case 'KeyP': e.preventDefault(); if (r.handlePrintPDF) r.handlePrintPDF(); break;
+        case 'KeyR': e.preventDefault(); if (r.handleCombinedReport) r.handleCombinedReport(); break;
+        case 'BracketLeft': e.preventDefault();
+          r.viewingVersion
+            ? r.setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: true}))}))
+            : r.syncTasks(r.tasks.map(t => ({...t, isCollapsed: true})));
+          break;
+        case 'BracketRight': e.preventDefault();
+          r.viewingVersion
+            ? r.setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: false}))}))
+            : r.syncTasks(r.tasks.map(t => ({...t, isCollapsed: false})));
+          break;
+        default: break;
       }
     };
     window.addEventListener('keydown', handleKey);
@@ -194,7 +229,7 @@ function App() {
   // PROJECT MANAGEMENT
   const clearFilters = () => {
     setFilterSupervisors([]);
-    setFilterStatuses([]);
+    setFilterStatuses(DEFAULT_STATUS_FILTER);
     setFilterLevels([]);
     setFilterDateRange({ start: '', end: '' });
   };
@@ -414,7 +449,9 @@ function App() {
     });
   }, [displayTasks, filterSupervisors, filterStatuses, filterLevels, filterDateRange]);
 
-  const isFilterActive = filterSupervisors.length > 0 || filterStatuses.length > 0 || filterLevels.length > 0 || (filterDateRange.start && filterDateRange.end);
+  const isStatusDefault = filterStatuses.length === DEFAULT_STATUS_FILTER.length && DEFAULT_STATUS_FILTER.every(s => filterStatuses.includes(s));
+  const isFilterActive = filterSupervisors.length > 0 || !isStatusDefault || filterLevels.length > 0 || !!(filterDateRange.start && filterDateRange.end);
+  const isDragFilterActive = filteredTasks.length < displayTasks.length;
 
   const currentProjectName = projects.find(p => p.id === activeProjectId)?.name || 'WBS Project';
 
@@ -701,7 +738,7 @@ function App() {
         {/* Project Tab Bar */}
         <div className="project-bar">
           <div className="project-tabs">
-            {projects.map(p => (
+            {projects.map((p, idx) => (
               <div
                 key={p.id}
                 className={`project-tab ${p.id === activeProjectId ? 'active' : ''} ${dragOverProjectId === p.id ? 'drag-over' : ''} ${dragProjectId === p.id ? 'dragging' : ''}`}
@@ -712,6 +749,7 @@ function App() {
                 onDragEnd={handleProjectDragEnd}
                 onClick={() => switchProject(p.id)}
               >
+                <span className="project-tab-num">{idx + 1}</span>
                 {editingProjectId === p.id ? (
                   <input
                     autoFocus
@@ -778,85 +816,109 @@ function App() {
           </div>
         )}
 
-        <div className="filter-bar">
-          <div className="filter-group">
-            <span className="filter-label">Filters:</span>
-            <div className="filter-item popover-trigger">
-              <button className={`filter-btn ${filterSupervisors.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-sup' ? null : {type: 'filter-sup'}); }}>
-                Supervisors {filterSupervisors.length > 0 && `(${filterSupervisors.length})`}
-              </button>
-              {activeMenu?.type === 'filter-sup' && (
-                <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
-                  <div className="menu-scroll">
-                    {ASSIGNED_OPTIONS.map(opt => (
-                      <label key={opt} className="menu-item">
-                        <input type="checkbox" checked={filterSupervisors.includes(opt)} onChange={() => setFilterSupervisors(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> {opt}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="filter-item popover-trigger">
-              <button className={`filter-btn ${filterStatuses.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-status' ? null : {type: 'filter-status'}); }}>
-                Status {filterStatuses.length > 0 && `(${filterStatuses.length})`}
-              </button>
-              {activeMenu?.type === 'filter-status' && (
-                <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
-                  <div className="menu-scroll">
-                    {STATUS_OPTIONS.map(opt => (
-                      <label key={opt} className="menu-item">
-                        <input type="checkbox" checked={filterStatuses.includes(opt)} onChange={() => setFilterStatuses(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> {opt}
-                      </label>
-                    ))}
-                    <label className="menu-item">
-                      <input type="checkbox" checked={filterStatuses.includes('fraction')} onChange={() => setFilterStatuses(prev => prev.includes('fraction') ? prev.filter(v => v !== 'fraction') : [...prev, 'fraction'])} /> Progress Tracking
-                    </label>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="filter-item popover-trigger">
-              <button className={`filter-btn ${filterLevels.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-level' ? null : {type: 'filter-level'}); }}>
-                Levels {filterLevels.length > 0 && `(${filterLevels.length})`}
-              </button>
-              {activeMenu?.type === 'filter-level' && (
-                <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
-                  <div className="menu-scroll">
-                    {LEVEL_OPTIONS.map(opt => (
-                      <label key={opt} className="menu-item">
-                        <input type="checkbox" checked={filterLevels.includes(opt)} onChange={() => setFilterLevels(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> Level {opt}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="filter-item date-range-group">
-              <label>Ends Between:</label>
-              <input type="date" value={filterDateRange.start} onChange={(e) => setFilterDateRange({...filterDateRange, start: e.target.value})} className="filter-date-input" />
-              <span>to</span>
-              <input type="date" value={filterDateRange.end} onChange={(e) => setFilterDateRange({...filterDateRange, end: e.target.value})} className="filter-date-input" />
-            </div>
-            {isFilterActive && <button className="clear-filters-btn" onClick={clearFilters}>Clear Filters ×</button>}
-          </div>
-        </div>
       </header>
 
       <div className="wbs-container">
         <DragDropContext onDragEnd={(result) => {
           if (!result.destination) return;
           if (viewingVersion) return;
-          const sIdx = result.source.index;
-          const dIdx = result.destination.index;
           if (isFilterActive) return;
+          const sTask = filteredTasks[result.source.index];
+          const dTask = filteredTasks[result.destination.index];
+          if (!sTask || !dTask) return;
+          const sIdx = sTask.originalIndex;
+          const dIdx = dTask.originalIndex;
           const blockSize = (tasks[sIdx].isCollapsed ? getSubtaskRange(sIdx) : sIdx) - sIdx + 1;
+          // When destination is collapsed, insert after its entire subtree, not just its root
+          const dEnd = tasks[dIdx].isCollapsed ? getSubtaskRange(dIdx) : dIdx;
           const copy = [...tasks];
           const block = copy.splice(sIdx, blockSize);
-          copy.splice(dIdx > sIdx ? dIdx - blockSize + 1 : dIdx, 0, ...block);
+          copy.splice(dEnd > sIdx ? dEnd - blockSize + 1 : dIdx, 0, ...block);
           syncTasks(copy);
         }}>
           <div className={`wbs-table ${showOriginal ? 'show-original' : ''}`}>
+
+            {/* Controls: filters row + shortcuts row — fused to top of table */}
+            <div className="wbs-controls-row">
+              <div className="controls-filters">
+                <span className="filter-label">Filters:</span>
+                <div className="filter-item popover-trigger">
+                  <button className={`filter-btn ${filterSupervisors.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-sup' ? null : {type: 'filter-sup'}); }}>
+                    Supervisors {filterSupervisors.length > 0 && `(${filterSupervisors.length})`}
+                  </button>
+                  {activeMenu?.type === 'filter-sup' && (
+                    <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
+                      <div className="menu-scroll">
+                        {ASSIGNED_OPTIONS.map(opt => (
+                          <label key={opt} className="menu-item">
+                            <input type="checkbox" checked={filterSupervisors.includes(opt)} onChange={() => setFilterSupervisors(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> {opt}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="filter-item popover-trigger">
+                  <button className={`filter-btn ${!isStatusDefault ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-status' ? null : {type: 'filter-status'}); }}>
+                    Status ({filterStatuses.length}/{ALL_STATUS_FILTER_OPTIONS.length})
+                  </button>
+                  {activeMenu?.type === 'filter-status' && (
+                    <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
+                      <div className="menu-scroll">
+                        {STATUS_OPTIONS.map(opt => (
+                          <label key={opt} className="menu-item">
+                            <input type="checkbox" checked={filterStatuses.includes(opt)} onChange={() => setFilterStatuses(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> {opt}
+                          </label>
+                        ))}
+                        <label className="menu-item">
+                          <input type="checkbox" checked={filterStatuses.includes('fraction')} onChange={() => setFilterStatuses(prev => prev.includes('fraction') ? prev.filter(v => v !== 'fraction') : [...prev, 'fraction'])} /> Progress Tracking
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="filter-item popover-trigger">
+                  <button className={`filter-btn ${filterLevels.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-level' ? null : {type: 'filter-level'}); }}>
+                    Levels {filterLevels.length > 0 && `(${filterLevels.length})`}
+                  </button>
+                  {activeMenu?.type === 'filter-level' && (
+                    <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
+                      <div className="menu-scroll">
+                        {LEVEL_OPTIONS.map(opt => (
+                          <label key={opt} className="menu-item">
+                            <input type="checkbox" checked={filterLevels.includes(opt)} onChange={() => setFilterLevels(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> Level {opt}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="filter-item date-range-group">
+                  <label>Ends:</label>
+                  <input type="date" value={filterDateRange.start} onChange={(e) => setFilterDateRange({...filterDateRange, start: e.target.value})} className="filter-date-input" />
+                  <span>–</span>
+                  <input type="date" value={filterDateRange.end} onChange={(e) => setFilterDateRange({...filterDateRange, end: e.target.value})} className="filter-date-input" />
+                </div>
+                {isFilterActive && <button className="clear-filters-btn" onClick={clearFilters}>Clear ×</button>}
+              </div>
+              <div className="controls-shortcuts">
+                <span className="kbrd"><kbd>Enter</kbd> new</span>
+                <span className="kbrd"><kbd>Tab</kbd> indent</span>
+                <span className="kbrd"><kbd>Shift+Tab</kbd> outdent</span>
+                <span className="kbrd"><kbd>Ctrl+Shift+D</kbd> delete</span>
+                <span className="kbrd-divider"></span>
+                <span className="kbrd"><kbd>Alt+D</kbd> originals</span>
+                <span className="kbrd"><kbd>Alt+H</kbd> history</span>
+                <span className="kbrd"><kbd>Alt+P</kbd> print</span>
+                <span className="kbrd"><kbd>Alt+R</kbd> combined</span>
+                <span className="kbrd"><kbd>Alt+[</kbd> collapse</span>
+                <span className="kbrd"><kbd>Alt+]</kbd> expand</span>
+                <span className="kbrd"><kbd>Alt+1–9</kbd> switch tab</span>
+                <span className="kbrd"><kbd>dbl-click</kbd> rename tab</span>
+                <span className="kbrd mac-note">(Mac: Option = Alt)</span>
+              </div>
+            </div>
+
             <div className="wbs-row header-row">
               <div className="col drag-handle-placeholder"></div>
               <div className="col num-col">WBS</div>
@@ -1025,15 +1087,6 @@ function App() {
           </div>
         </DragDropContext>
 
-        <div className="footer-bar">
-          <button className="main-add-btn" onClick={() => addTask()}>+ Add New Task</button>
-          <div className="shortcuts">
-            <span><b>Enter</b> New Task</span>
-            <span><b>Tab</b> Indent</span>
-            <span><b>Shift + Tab</b> Outdent</span>
-            <span><b>Ctrl + Shift + D</b> Delete Block</span>
-          </div>
-        </div>
       </div>
 
       {/* Version History Modal */}
