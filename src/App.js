@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -7,7 +7,10 @@ import { doc, onSnapshot, setDoc, getDoc, collection, addDoc, getDocs, query, or
 import './App.css';
 
 const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh C.", "Lokesh", "Jay", "Mahender","Anil"];
+const TODAY = new Date().toLocaleDateString('sv'); // YYYY-MM-DD in local timezone
 const STATUS_OPTIONS = ["-", "to be started", "in progress", "completed", "stuck"];
+const ALL_STATUS_FILTER_OPTIONS = [...STATUS_OPTIONS, 'fraction'];
+const DEFAULT_STATUS_FILTER = ALL_STATUS_FILTER_OPTIONS.filter(s => s !== 'completed');
 const LEVEL_OPTIONS = [0, 1, 2, 3, 4, 5];
 
 function App() {
@@ -61,9 +64,17 @@ function App() {
   const [historyVersions, setHistoryVersions] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  const [showCompletedSection, setShowCompletedSection] = useState(false);
+  const [completedCollapsedIds, setCompletedCollapsedIds] = useState(new Set());
+  const toggleCompletedCollapse = (id) => setCompletedCollapsedIds(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
   // Filter States
   const [filterSupervisors, setFilterSupervisors] = useState([]);
-  const [filterStatuses, setFilterStatuses] = useState([]);
+  const [filterStatuses, setFilterStatuses] = useState(DEFAULT_STATUS_FILTER);
   const [filterLevels, setFilterLevels] = useState([]);
   const [filterDateRange, setFilterDateRange] = useState({ start: '', end: '' });
 
@@ -180,11 +191,44 @@ function App() {
     return () => window.removeEventListener('click', handleClick);
   }, []);
 
+  // Ref always holds the latest closures for use in the stable keydown handler
+  const shortcutRef = useRef({});
+  useEffect(() => {
+    shortcutRef.current = {
+      handlePrintPDF, handleCombinedReport, loadHistory,
+      tasks, viewingVersion, projects, syncTasks,
+      setShowOriginal, setShowHistory, setViewingVersion, switchProject,
+    };
+  });
+
   useEffect(() => {
     const handleKey = (e) => {
-      if (e.altKey && e.code === 'KeyD') {
-        e.preventDefault();
-        setShowOriginal(prev => !prev);
+      if (!e.altKey || e.ctrlKey || e.shiftKey) return;
+      // No input guard — e.preventDefault() in each case prevents special chars (e.g. ð on Mac)
+      const r = shortcutRef.current;
+      // Alt+1–9 → switch to that project tab (e.code is platform-safe with modifier keys)
+      if (/^Digit[1-9]$/.test(e.code)) {
+        const p = r.projects[parseInt(e.code.slice(5)) - 1];
+        if (p) { e.preventDefault(); r.switchProject(p.id); }
+        return;
+      }
+      // Use e.code (physical key) not e.key — Option+letter on Mac produces special chars
+      switch (e.code) {
+        case 'KeyD': e.preventDefault(); r.setShowOriginal(v => !v); break;
+        case 'KeyH': e.preventDefault(); r.setShowHistory(true); r.loadHistory(); break;
+        case 'KeyP': e.preventDefault(); if (r.handlePrintPDF) r.handlePrintPDF(); break;
+        case 'KeyR': e.preventDefault(); if (r.handleCombinedReport) r.handleCombinedReport(); break;
+        case 'BracketLeft': e.preventDefault();
+          r.viewingVersion
+            ? r.setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: true}))}))
+            : r.syncTasks(r.tasks.map(t => ({...t, isCollapsed: true})));
+          break;
+        case 'BracketRight': e.preventDefault();
+          r.viewingVersion
+            ? r.setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: false}))}))
+            : r.syncTasks(r.tasks.map(t => ({...t, isCollapsed: false})));
+          break;
+        default: break;
       }
     };
     window.addEventListener('keydown', handleKey);
@@ -194,7 +238,7 @@ function App() {
   // PROJECT MANAGEMENT
   const clearFilters = () => {
     setFilterSupervisors([]);
-    setFilterStatuses([]);
+    setFilterStatuses(DEFAULT_STATUS_FILTER);
     setFilterLevels([]);
     setFilterDateRange({ start: '', end: '' });
   };
@@ -397,13 +441,20 @@ function App() {
   const displayTasks = viewingVersion ? viewingVersion.tasks : tasks;
   const displayReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
 
+  const isStatusDefault = filterStatuses.length === DEFAULT_STATUS_FILTER.length && DEFAULT_STATUS_FILTER.every(s => filterStatuses.includes(s));
+
   const filteredTasks = useMemo(() => {
+    const statusDefault = filterStatuses.length === DEFAULT_STATUS_FILTER.length && DEFAULT_STATUS_FILTER.every(s => filterStatuses.includes(s));
     return displayTasks.map((task, originalIndex) => ({ ...task, originalIndex })).filter(task => {
       const matchSup = filterSupervisors.length === 0 || task.assignedTo.some(s => filterSupervisors.includes(s));
       let matchStatus = true;
       if (filterStatuses.length > 0) {
         const currentStatusVal = task.statusType === 'fraction' ? 'fraction' : task.status;
-        matchStatus = filterStatuses.includes(currentStatusVal);
+        if (statusDefault && currentStatusVal === 'completed') {
+          matchStatus = task.completedAt === TODAY;
+        } else {
+          matchStatus = filterStatuses.includes(currentStatusVal);
+        }
       }
       const matchLevel = filterLevels.length === 0 || filterLevels.includes(task.level);
       let matchDate = true;
@@ -414,20 +465,124 @@ function App() {
     });
   }, [displayTasks, filterSupervisors, filterStatuses, filterLevels, filterDateRange]);
 
-  const isFilterActive = filterSupervisors.length > 0 || filterStatuses.length > 0 || filterLevels.length > 0 || (filterDateRange.start && filterDateRange.end);
+  const isFilterActive = filterSupervisors.length > 0 || !isStatusDefault || filterLevels.length > 0 || !!(filterDateRange.start && filterDateRange.end);
+  // Drag is allowed when only the status filter deviates (no level/supervisor/date filters)
+  const isOnlyStatusDiff = isFilterActive && !isStatusDefault && filterSupervisors.length === 0 && filterLevels.length === 0 && !(filterDateRange.start && filterDateRange.end);
+
+  // visibleTasks: only tasks that are actually rendered (collapse-hidden removed, consecutive DnD indices)
+  const visibleTasks = useMemo(() => {
+    if (isFilterActive && !isOnlyStatusDiff) return filteredTasks;
+    return filteredTasks.filter(task => {
+      const idx = task.originalIndex;
+      for (let i = 0; i < idx; i++) {
+        if (displayTasks[i].isCollapsed) {
+          const lvl = displayTasks[i].level;
+          let end = i + 1;
+          while (end < displayTasks.length && displayTasks[end].level > lvl) end++;
+          if (idx > i && idx <= end - 1) return false;
+        }
+      }
+      return true;
+    });
+  }, [filteredTasks, isFilterActive, isOnlyStatusDiff, displayTasks]);
+
+  // displayList: visibleTasks + ghost ancestor rows injected when filter is active (but not for status-only diff)
+  const displayList = useMemo(() => {
+    let di = 0;
+    if (!isFilterActive || isOnlyStatusDiff) return visibleTasks.map(t => ({ ...t, draggableIdx: di++ }));
+const result = [];
+    const seenIds = new Set();
+    const visibleIds = new Set(visibleTasks.map(t => t.id));
+    for (const task of visibleTasks) {
+      const ancestors = [];
+      let targetLvl = task.level - 1;
+      for (let i = task.originalIndex - 1; i >= 0 && targetLvl >= 0; i--) {
+        if (displayTasks[i].level === targetLvl) {
+          if (!visibleIds.has(displayTasks[i].id)) {
+            ancestors.unshift({ ...displayTasks[i], originalIndex: i, isGhost: true, draggableIdx: -1 });
+          }
+          targetLvl--;
+        }
+      }
+      for (const anc of ancestors) {
+        if (!seenIds.has(anc.id)) { seenIds.add(anc.id); result.push(anc); }
+      }
+      result.push({ ...task, draggableIdx: di++ });
+    }
+    return result;
+  }, [visibleTasks, isFilterActive, isOnlyStatusDiff, displayTasks]);
 
   const currentProjectName = projects.find(p => p.id === activeProjectId)?.name || 'WBS Project';
 
+  // Completed tasks section: completed tasks not completed today (archived)
+  const completedTasksForSection = useMemo(() => {
+    if (viewingVersion) return [];
+    return displayTasks
+      .map((task, i) => ({ ...task, originalIndex: i }))
+      .filter(task => task.status === 'completed' && task.completedAt !== TODAY);
+  }, [displayTasks, viewingVersion]);
+
+  const completedDisplayList = useMemo(() => {
+    if (!completedTasksForSection.length) return [];
+    const result = [];
+    const seenIds = new Set();
+    const completedIds = new Set(completedTasksForSection.map(t => t.id));
+    for (const task of completedTasksForSection) {
+      if (seenIds.has(task.id)) continue;
+      const ancestors = [];
+      let targetLvl = task.level - 1;
+      for (let i = task.originalIndex - 1; i >= 0 && targetLvl >= 0; i--) {
+        if (displayTasks[i].level === targetLvl) {
+          if (!seenIds.has(displayTasks[i].id)) {
+            ancestors.unshift({ ...displayTasks[i], originalIndex: i, isGhost: !completedIds.has(displayTasks[i].id) });
+          }
+          targetLvl--;
+        }
+      }
+      for (const anc of ancestors) { seenIds.add(anc.id); result.push(anc); }
+      seenIds.add(task.id);
+      result.push(task);
+    }
+    return result;
+  }, [completedTasksForSection, displayTasks]);
+
+  // Pre-compute which tasks are hidden in the completed section due to collapsed ancestors
+  // Uses completedCollapsedIds (local to completed section) — independent of main WBS state
+  const completedHiddenIds = useMemo(() => {
+    const hiddenSet = new Set();
+    for (let idx = 0; idx < completedDisplayList.length; idx++) {
+      const task = completedDisplayList[idx];
+      for (let i = idx - 1; i >= 0; i--) {
+        const prev = completedDisplayList[i];
+        if (prev.level < task.level) {
+          if (completedCollapsedIds.has(prev.id) || hiddenSet.has(prev.id)) hiddenSet.add(task.id);
+          break;
+        }
+      }
+    }
+    return hiddenSet;
+  }, [completedDisplayList, completedCollapsedIds]);
+
   // PDF EXPORT
-  const buildProjectTable = (pdfDoc, effectiveTasks, projectName, effectiveReportDate) => {
+  const buildProjectTable = (pdfDoc, effectiveTasks, projectName, effectiveReportDate, wbsSource = null, filterInfo = null) => {
     const todayStr = formatDateShort(effectiveReportDate);
     pdfDoc.setFontSize(16);
     pdfDoc.text(`${projectName} Report`, 14, 15);
     pdfDoc.setFontSize(10);
     pdfDoc.text(`Date: ${todayStr}`, 14, 22);
+    let headerEndY = 28;
+    if (filterInfo) {
+      pdfDoc.setFontSize(8);
+      pdfDoc.setTextColor(90, 90, 90);
+      pdfDoc.text(`Filters: ${filterInfo}`, 14, 28);
+      pdfDoc.setTextColor(0, 0, 0);
+      headerEndY = 33;
+    }
 
     const tableData = effectiveTasks.map((task, index) => {
-      const wbsNum = generateWBSString(index, effectiveTasks);
+      const wbsNum = (wbsSource && task.originalIndex != null)
+        ? generateWBSString(task.originalIndex, wbsSource)
+        : generateWBSString(index, effectiveTasks);
       const indent = "        ".repeat(task.level);
       let statusText = '';
       if (task.statusType !== 'fraction') {
@@ -447,7 +602,7 @@ function App() {
     });
 
     autoTable(pdfDoc, {
-      startY: 30,
+      startY: headerEndY + 2,
       head: [['WBS', 'TASK DESCRIPTION', 'SUPERVISOR', 'STATUS', 'START', 'DAYS', 'END DATE', 'REMARKS']],
       body: tableData,
       theme: 'grid',
@@ -538,15 +693,26 @@ function App() {
 
   // Print current project
   const handlePrintPDF = () => {
-    const effectiveTasks = viewingVersion ? viewingVersion.tasks : tasks;
+    const effectiveTasksFull = viewingVersion ? viewingVersion.tasks : tasks;
     const effectiveReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
     const pdfDoc = new jsPDF('l', 'mm', 'a4');
-    buildProjectTable(pdfDoc, effectiveTasks, currentProjectName, effectiveReportDate);
+    if (viewingVersion) {
+      buildProjectTable(pdfDoc, effectiveTasksFull, currentProjectName, effectiveReportDate);
+    } else {
+      // filteredTasks already applies TODAY filter + any active filters; originalIndex enables correct WBS
+      const filterParts = [];
+      if (filterSupervisors.length > 0) filterParts.push(`Supervisors: ${filterSupervisors.join(', ')}`);
+      if (!isStatusDefault) filterParts.push(`Status: ${filterStatuses.join(', ')}`);
+      if (filterLevels.length > 0) filterParts.push(`Levels: ${filterLevels.map(l => `L${l}`).join(', ')}`);
+      if (filterDateRange.start && filterDateRange.end) filterParts.push(`End: ${filterDateRange.start} – ${filterDateRange.end}`);
+      const filterInfo = filterParts.length > 0 ? filterParts.join('  |  ') : null;
+      buildProjectTable(pdfDoc, filteredTasks, currentProjectName, effectiveReportDate, effectiveTasksFull, filterInfo);
+      saveVersion(tasks, reportDate);
+    }
     pdfDoc.save(`WBS_${currentProjectName.replace(/\s+/g, '_')}_${effectiveReportDate}.pdf`);
-    if (!viewingVersion) saveVersion(tasks, reportDate);
   };
 
-  // Combined report: all projects in tab order
+  // Combined report: all projects, always excludes completed tasks (except completed today)
   const handleCombinedReport = async () => {
     const effectiveReportDate = reportDate;
     const pdfDoc = new jsPDF('l', 'mm', 'a4');
@@ -560,7 +726,10 @@ function App() {
         const snap = await getDoc(doc(db, 'projects', p.id));
         projectTasks = snap.exists() ? snap.data().tasks || [] : [];
       }
-      buildProjectTable(pdfDoc, projectTasks, p.name, effectiveReportDate);
+      const filteredForReport = projectTasks
+        .map((t, i) => ({ ...t, originalIndex: i }))
+        .filter(t => t.status !== 'completed' || t.completedAt === TODAY);
+      buildProjectTable(pdfDoc, filteredForReport, p.name, effectiveReportDate, projectTasks);
     }
     pdfDoc.save(`WBS_Combined_Report_${effectiveReportDate}.pdf`);
     saveVersion(tasks, reportDate);
@@ -612,7 +781,8 @@ function App() {
       assignedTo: [], status: '-', statusType: 'text',
       tillYest: '', today: '', totalTarget: '',
       startDate: '', days: '', endDate: '', remarks: '',
-      origStartDate: '', origDays: '', origEndDate: ''
+      origStartDate: '', origDays: '', origEndDate: '',
+      taskSeq: tasks.reduce((max, t) => Math.max(max, t.taskSeq || 0), 0) + 1,
     });
     syncTasks(newTasks);
     setFocusId(newId);
@@ -660,7 +830,10 @@ function App() {
         }
         let finalValue = value;
         if (field === 'text' || field === 'remarks') finalValue = capitalizeFirst(value);
-        return { ...t, [field]: finalValue };
+        const updated = { ...t, [field]: finalValue };
+        if (field === 'status') updated.completedAt = value === 'completed' ? TODAY : null;
+        if (field === 'statusType') updated.completedAt = null; // switching to fraction clears completion
+        return updated;
       }
       return t;
     }));
@@ -701,7 +874,7 @@ function App() {
         {/* Project Tab Bar */}
         <div className="project-bar">
           <div className="project-tabs">
-            {projects.map(p => (
+            {projects.map((p, idx) => (
               <div
                 key={p.id}
                 className={`project-tab ${p.id === activeProjectId ? 'active' : ''} ${dragOverProjectId === p.id ? 'drag-over' : ''} ${dragProjectId === p.id ? 'dragging' : ''}`}
@@ -712,6 +885,7 @@ function App() {
                 onDragEnd={handleProjectDragEnd}
                 onClick={() => switchProject(p.id)}
               >
+                <span className="project-tab-num">{idx + 1}</span>
                 {editingProjectId === p.id ? (
                   <input
                     autoFocus
@@ -778,85 +952,109 @@ function App() {
           </div>
         )}
 
-        <div className="filter-bar">
-          <div className="filter-group">
-            <span className="filter-label">Filters:</span>
-            <div className="filter-item popover-trigger">
-              <button className={`filter-btn ${filterSupervisors.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-sup' ? null : {type: 'filter-sup'}); }}>
-                Supervisors {filterSupervisors.length > 0 && `(${filterSupervisors.length})`}
-              </button>
-              {activeMenu?.type === 'filter-sup' && (
-                <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
-                  <div className="menu-scroll">
-                    {ASSIGNED_OPTIONS.map(opt => (
-                      <label key={opt} className="menu-item">
-                        <input type="checkbox" checked={filterSupervisors.includes(opt)} onChange={() => setFilterSupervisors(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> {opt}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="filter-item popover-trigger">
-              <button className={`filter-btn ${filterStatuses.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-status' ? null : {type: 'filter-status'}); }}>
-                Status {filterStatuses.length > 0 && `(${filterStatuses.length})`}
-              </button>
-              {activeMenu?.type === 'filter-status' && (
-                <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
-                  <div className="menu-scroll">
-                    {STATUS_OPTIONS.map(opt => (
-                      <label key={opt} className="menu-item">
-                        <input type="checkbox" checked={filterStatuses.includes(opt)} onChange={() => setFilterStatuses(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> {opt}
-                      </label>
-                    ))}
-                    <label className="menu-item">
-                      <input type="checkbox" checked={filterStatuses.includes('fraction')} onChange={() => setFilterStatuses(prev => prev.includes('fraction') ? prev.filter(v => v !== 'fraction') : [...prev, 'fraction'])} /> Progress Tracking
-                    </label>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="filter-item popover-trigger">
-              <button className={`filter-btn ${filterLevels.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-level' ? null : {type: 'filter-level'}); }}>
-                Levels {filterLevels.length > 0 && `(${filterLevels.length})`}
-              </button>
-              {activeMenu?.type === 'filter-level' && (
-                <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
-                  <div className="menu-scroll">
-                    {LEVEL_OPTIONS.map(opt => (
-                      <label key={opt} className="menu-item">
-                        <input type="checkbox" checked={filterLevels.includes(opt)} onChange={() => setFilterLevels(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> Level {opt}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="filter-item date-range-group">
-              <label>Ends Between:</label>
-              <input type="date" value={filterDateRange.start} onChange={(e) => setFilterDateRange({...filterDateRange, start: e.target.value})} className="filter-date-input" />
-              <span>to</span>
-              <input type="date" value={filterDateRange.end} onChange={(e) => setFilterDateRange({...filterDateRange, end: e.target.value})} className="filter-date-input" />
-            </div>
-            {isFilterActive && <button className="clear-filters-btn" onClick={clearFilters}>Clear Filters ×</button>}
-          </div>
-        </div>
       </header>
 
       <div className="wbs-container">
         <DragDropContext onDragEnd={(result) => {
           if (!result.destination) return;
           if (viewingVersion) return;
-          const sIdx = result.source.index;
-          const dIdx = result.destination.index;
-          if (isFilterActive) return;
+          if (isFilterActive && !isOnlyStatusDiff) return;
+          const sTask = visibleTasks[result.source.index];
+          const dTask = visibleTasks[result.destination.index];
+          if (!sTask || !dTask) return;
+          const sIdx = sTask.originalIndex;
+          const dIdx = dTask.originalIndex;
           const blockSize = (tasks[sIdx].isCollapsed ? getSubtaskRange(sIdx) : sIdx) - sIdx + 1;
+          // When destination is collapsed, insert after its entire subtree, not just its root
+          const dEnd = tasks[dIdx].isCollapsed ? getSubtaskRange(dIdx) : dIdx;
           const copy = [...tasks];
           const block = copy.splice(sIdx, blockSize);
-          copy.splice(dIdx > sIdx ? dIdx - blockSize + 1 : dIdx, 0, ...block);
+          copy.splice(dEnd > sIdx ? dEnd - blockSize + 1 : dIdx, 0, ...block);
           syncTasks(copy);
         }}>
           <div className={`wbs-table ${showOriginal ? 'show-original' : ''}`}>
+
+            {/* Controls: filters row + shortcuts row — fused to top of table */}
+            <div className="wbs-controls-row">
+              <div className="controls-filters">
+                <span className="filter-label">Filters:</span>
+                <div className="filter-item popover-trigger">
+                  <button className={`filter-btn ${filterSupervisors.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-sup' ? null : {type: 'filter-sup'}); }}>
+                    Supervisors {filterSupervisors.length > 0 && `(${filterSupervisors.length})`}
+                  </button>
+                  {activeMenu?.type === 'filter-sup' && (
+                    <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
+                      <div className="menu-scroll">
+                        {ASSIGNED_OPTIONS.map(opt => (
+                          <label key={opt} className="menu-item">
+                            <input type="checkbox" checked={filterSupervisors.includes(opt)} onChange={() => setFilterSupervisors(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> {opt}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="filter-item popover-trigger">
+                  <button className={`filter-btn ${!isStatusDefault ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-status' ? null : {type: 'filter-status'}); }}>
+                    Status ({filterStatuses.length}/{ALL_STATUS_FILTER_OPTIONS.length})
+                  </button>
+                  {activeMenu?.type === 'filter-status' && (
+                    <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
+                      <div className="menu-scroll">
+                        {STATUS_OPTIONS.map(opt => (
+                          <label key={opt} className="menu-item">
+                            <input type="checkbox" checked={filterStatuses.includes(opt)} onChange={() => setFilterStatuses(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> {opt}
+                          </label>
+                        ))}
+                        <label className="menu-item">
+                          <input type="checkbox" checked={filterStatuses.includes('fraction')} onChange={() => setFilterStatuses(prev => prev.includes('fraction') ? prev.filter(v => v !== 'fraction') : [...prev, 'fraction'])} /> Progress Tracking
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="filter-item popover-trigger">
+                  <button className={`filter-btn ${filterLevels.length ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu?.type === 'filter-level' ? null : {type: 'filter-level'}); }}>
+                    Levels {filterLevels.length > 0 && `(${filterLevels.length})`}
+                  </button>
+                  {activeMenu?.type === 'filter-level' && (
+                    <div className="popover-menu filter-menu" onClick={e => e.stopPropagation()}>
+                      <div className="menu-scroll">
+                        {LEVEL_OPTIONS.map(opt => (
+                          <label key={opt} className="menu-item">
+                            <input type="checkbox" checked={filterLevels.includes(opt)} onChange={() => setFilterLevels(prev => prev.includes(opt) ? prev.filter(v => v !== opt) : [...prev, opt])} /> Level {opt}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="filter-item date-range-group">
+                  <label>Ends:</label>
+                  <input type="date" value={filterDateRange.start} onChange={(e) => setFilterDateRange({...filterDateRange, start: e.target.value})} className="filter-date-input" />
+                  <span>–</span>
+                  <input type="date" value={filterDateRange.end} onChange={(e) => setFilterDateRange({...filterDateRange, end: e.target.value})} className="filter-date-input" />
+                </div>
+                {isFilterActive && <button className="clear-filters-btn" onClick={clearFilters}>Clear ×</button>}
+              </div>
+              <div className="controls-shortcuts">
+                <span className="kbrd"><kbd>Enter</kbd> new</span>
+                <span className="kbrd"><kbd>Tab</kbd> indent</span>
+                <span className="kbrd"><kbd>Shift+Tab</kbd> outdent</span>
+                <span className="kbrd"><kbd>Ctrl+Shift+D</kbd> delete</span>
+                <span className="kbrd-divider"></span>
+                <span className="kbrd"><kbd>Alt+D</kbd> originals</span>
+                <span className="kbrd"><kbd>Alt+H</kbd> history</span>
+                <span className="kbrd"><kbd>Alt+P</kbd> print</span>
+                <span className="kbrd"><kbd>Alt+R</kbd> combined</span>
+                <span className="kbrd"><kbd>Alt+[</kbd> collapse</span>
+                <span className="kbrd"><kbd>Alt+]</kbd> expand</span>
+                <span className="kbrd"><kbd>Alt+1–9</kbd> switch tab</span>
+                <span className="kbrd"><kbd>dbl-click</kbd> rename tab</span>
+                <span className="kbrd mac-note">(Mac: Option = Alt)</span>
+              </div>
+            </div>
+
             <div className="wbs-row header-row">
               <div className="col drag-handle-placeholder"></div>
               <div className="col num-col">WBS</div>
@@ -872,16 +1070,33 @@ function App() {
             <Droppable droppableId="wbs-list">
               {(provided) => (
                 <div {...provided.droppableProps} ref={provided.innerRef}>
-                  {filteredTasks.map((task, fIndex) => {
+                  {displayList.map((task) => {
                     const originalIndex = task.originalIndex;
-                    if (!isFilterActive) {
-                      let visible = true;
-                      for (let i = 0; i < originalIndex; i++) {
-                        if (displayTasks[i].isCollapsed && originalIndex > i && originalIndex <= getSubtaskRange(i, displayTasks)) visible = false;
-                      }
-                      if (!visible) return null;
-                    }
                     const hasChildren = originalIndex < displayTasks.length - 1 && displayTasks[originalIndex + 1].level > task.level;
+
+                    if (task.isGhost) {
+                      return (
+                        <div key={`ghost-${task.id}`} className={`wbs-row ghost-row level-${task.level}`}>
+                          <div className="col drag-handle drag-disabled">⠿</div>
+                          <div className="col num-col ghost-num">
+                            <div className="wbs-num-wrapper">
+                              <span>{generateWBSString(originalIndex, displayTasks)}</span>
+                              <span className="task-seq-id">#{task.taskSeq || originalIndex + 1}</span>
+                            </div>
+                          </div>
+                          <div className="col task-col">
+                            <div className="task-input-wrapper" style={{ paddingLeft: `${task.level * 24}px` }}>
+                              <span className={`collapse-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} style={{ cursor: 'default' }}>
+                                {task.isCollapsed ? '▶' : '▼'}
+                              </span>
+                              <span className="ghost-task-name">{task.text || 'Unnamed'}</span>
+                            </div>
+                          </div>
+                          <div className="col assigned-col" /><div className="col status-col" /><div className="col date-col" /><div className="col day-col" /><div className="col date-col" /><div className="col remarks-col" /><div className="col action-col" />
+                        </div>
+                      );
+                    }
+
                     const isReadOnly = !!viewingVersion;
                     const isMenuOpen = activeMenu?.id === task.id;
                     const showBlueAccent = task.level === 0 || (hasChildren && task.isCollapsed);
@@ -901,11 +1116,16 @@ function App() {
                       expTodayDisplay = daysFromStart > 0 ? Math.min(daysFromStart * expRate, totTarget).toFixed(1) : '0';
                     }
                     return (
-                      <Draggable key={task.id} draggableId={task.id} index={fIndex} isDragDisabled={isFilterActive || !!viewingVersion}>
+                      <Draggable key={task.id} draggableId={task.id} index={task.draggableIdx} isDragDisabled={(isFilterActive && !isOnlyStatusDiff) || !!viewingVersion}>
                         {(provided) => (
                           <div ref={provided.innerRef} {...provided.draggableProps} onKeyDown={(e) => handleKeyDown(e, originalIndex)} className={`wbs-row level-${task.level} ${showBlueAccent ? 'blue-accent' : ''} ${isMenuOpen ? 'z-top' : ''}`}>
-                            <div {...provided.dragHandleProps} className="col drag-handle">⠿</div>
-                            <div className="col num-col">{generateWBSString(originalIndex, displayTasks)}</div>
+                            <div {...provided.dragHandleProps} className={`col drag-handle ${(isFilterActive && !isOnlyStatusDiff) || !!viewingVersion ? 'drag-disabled' : ''}`}>⠿</div>
+                            <div className="col num-col">
+                              <div className="wbs-num-wrapper">
+                                <span>{generateWBSString(originalIndex, displayTasks)}</span>
+                                <span className="task-seq-id">#{task.taskSeq || originalIndex + 1}</span>
+                              </div>
+                            </div>
                             <div className="col task-col">
                               <div className="task-input-wrapper" style={{ paddingLeft: `${task.level * 24}px` }}>
                                 <button className={`collapse-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => t.id === task.id ? {...t, isCollapsed: !t.isCollapsed} : t)})) : toggleSelection(task.id, 'isCollapsed', !task.isCollapsed)}>
@@ -1025,15 +1245,91 @@ function App() {
           </div>
         </DragDropContext>
 
-        <div className="footer-bar">
-          <button className="main-add-btn" onClick={() => addTask()}>+ Add New Task</button>
-          <div className="shortcuts">
-            <span><b>Enter</b> New Task</span>
-            <span><b>Tab</b> Indent</span>
-            <span><b>Shift + Tab</b> Outdent</span>
-            <span><b>Ctrl + Shift + D</b> Delete Block</span>
+        {/* Completed Tasks Section */}
+        {!viewingVersion && completedDisplayList.length > 0 && (
+          <div className="completed-section">
+            <div className="completed-section-header" onClick={() => setShowCompletedSection(v => !v)}>
+              <span className="completed-section-chevron">{showCompletedSection ? '▼' : '▶'}</span>
+              <span className="completed-section-title">Completed Tasks</span>
+              <span className="completed-section-count">({completedTasksForSection.length})</span>
+            </div>
+            {showCompletedSection && (
+              <div className="completed-section-body">
+                <div className="wbs-row header-row">
+                  <div className="col drag-handle-placeholder"></div>
+                  <div className="col num-col">WBS</div>
+                  <div className="col task-col">TASK DESCRIPTION</div>
+                  <div className="col assigned-col">SUPERVISOR</div>
+                  <div className="col status-col">STATUS</div>
+                  <div className="col date-col">START</div>
+                  <div className="col day-col">DAYS</div>
+                  <div className="col date-col">END DATE</div>
+                  <div className="col remarks-col">REMARKS</div>
+                  <div className="col action-col"></div>
+                </div>
+                {completedDisplayList.map((task) => {
+                  if (completedHiddenIds.has(task.id)) return null;
+                  const originalIndex = task.originalIndex;
+                  const hasChildren = originalIndex < displayTasks.length - 1 && displayTasks[originalIndex + 1]?.level > task.level;
+
+                  if (task.isGhost) {
+                    return (
+                      <div key={`cghost-${task.id}`} className={`wbs-row ghost-row level-${task.level}`}>
+                        <div className="col drag-handle drag-disabled" style={{ opacity: 0 }}>⠿</div>
+                        <div className="col num-col ghost-num">
+                          <div className="wbs-num-wrapper">
+                            <span>{generateWBSString(originalIndex, displayTasks)}</span>
+                            <span className="task-seq-id">#{task.taskSeq || originalIndex + 1}</span>
+                          </div>
+                        </div>
+                        <div className="col task-col">
+                          <div className="task-input-wrapper" style={{ paddingLeft: `${task.level * 24}px` }}>
+                            <button className={`collapse-toggle completed-ghost-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} onClick={() => toggleCompletedCollapse(task.id)}>
+                              {completedCollapsedIds.has(task.id) ? '▶' : '▼'}
+                            </button>
+                            <span className="ghost-task-name">{task.text || 'Unnamed'}</span>
+                          </div>
+                        </div>
+                        <div className="col assigned-col" /><div className="col status-col" /><div className="col date-col" /><div className="col day-col" /><div className="col date-col" /><div className="col remarks-col" /><div className="col action-col" />
+                      </div>
+                    );
+                  }
+
+                  const showBlueAccent = task.level === 0 || (hasChildren && task.isCollapsed);
+                  return (
+                    <div key={`completed-${task.id}`} className={`wbs-row level-${task.level} ${showBlueAccent ? 'blue-accent' : ''} completed-task-row`}>
+                      <div className="col drag-handle drag-disabled" style={{ opacity: 0 }}>⠿</div>
+                      <div className="col num-col">
+                        <div className="wbs-num-wrapper">
+                          <span>{generateWBSString(originalIndex, displayTasks)}</span>
+                          <span className="task-seq-id">#{task.taskSeq || originalIndex + 1}</span>
+                        </div>
+                      </div>
+                      <div className="col task-col">
+                        <div className="task-input-wrapper" style={{ paddingLeft: `${task.level * 24}px` }}>
+                          <button className={`collapse-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} onClick={() => toggleCompletedCollapse(task.id)}>
+                            {completedCollapsedIds.has(task.id) ? '▶' : '▼'}
+                          </button>
+                          <span className="completed-task-name">{task.text}</span>
+                        </div>
+                      </div>
+                      <div className="col assigned-col completed-data-cell"><span className="completed-cell-text">{task.assignedTo?.join(', ') || '-'}</span></div>
+                      <div className="col status-col completed-status-cell"><span className="status-badge status-text-completed">completed</span></div>
+                      <div className="col date-col completed-data-cell"><span className="completed-cell-text">{task.startDate || '-'}</span></div>
+                      <div className="col day-col completed-data-cell"><span className="completed-cell-text">{task.days || '-'}</span></div>
+                      <div className="col date-col completed-data-cell"><span className="completed-cell-text">{task.endDate || '-'}</span></div>
+                      <div className="col remarks-col completed-data-cell"><span className="completed-cell-text">{task.remarks || ''}</span></div>
+                      <div className="col action-col completed-data-cell">
+                        <button className="restore-btn" title="Restore task" onClick={() => toggleSelection(task.id, 'status', '-')}>↺</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        </div>
+        )}
+
       </div>
 
       {/* Version History Modal */}
