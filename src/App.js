@@ -4,7 +4,73 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { db } from './firebase';
 import { doc, onSnapshot, setDoc, getDoc, collection, addDoc, getDocs, query, orderBy, deleteDoc } from 'firebase/firestore';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
 import './App.css';
+
+// Amavasya dates: 2024-2025 per Hindu panchang (IST), 2026 from astroyogi.com
+const AMAWAS_DATES = new Set([
+  // 2024
+  '2024-01-11','2024-02-09','2024-03-10','2024-04-08','2024-05-08','2024-06-06',
+  '2024-07-05','2024-08-04','2024-09-02','2024-10-02','2024-11-01','2024-12-01','2024-12-30',
+  // 2025
+  '2025-01-29','2025-02-28','2025-03-29','2025-04-27','2025-05-26','2025-06-25',
+  '2025-07-24','2025-08-23','2025-09-21','2025-10-21','2025-11-20','2025-12-19',
+  // 2026 — source: astroyogi.com (includes Adhik Maas double dates)
+  '2026-01-18','2026-02-17',
+  '2026-03-18','2026-03-19', // Darsha + Chaitra Amavasya
+  '2026-04-17','2026-05-16',
+  '2026-06-14','2026-06-15', // Adhik Maas double Amavasya
+  '2026-07-14','2026-08-12',
+  '2026-09-10','2026-09-11', // Darsha + Bhadrapada Amavasya
+  '2026-10-10',
+  '2026-11-08','2026-11-09', // Darsha + Kartika Amavasya
+  '2026-12-08',
+]);
+
+// Eid dates: India/Rajasthan moon-sighting dates
+// Eid ul-Fitr 2026: confirmed March 21 (moon not sighted on Mar 19)
+// Eid ul-Adha 2026: May 28 (Rajasthan)
+const EID_DATES = new Set([
+  // Eid ul-Fitr
+  '2024-04-11','2025-03-31','2026-03-21',
+  // Eid ul-Adha
+  '2024-06-17','2025-06-07','2026-05-28',
+]);
+
+function HolidayDatePicker({ value, onChange, className, readOnly, onKeyDown, placeholder }) {
+  const selected = value ? new Date(value + 'T00:00:00') : null;
+
+  const handleChange = (date) => {
+    const str = date ? date.toLocaleDateString('sv') : '';
+    onChange({ target: { value: str } });
+  };
+
+  const getDayClass = (date) => {
+    const str = date.toLocaleDateString('sv');
+    if (AMAWAS_DATES.has(str)) return 'holiday-amawas';
+    if (EID_DATES.has(str)) return 'holiday-eid';
+    return undefined;
+  };
+
+  return (
+    <DatePicker
+      selected={selected}
+      onChange={handleChange}
+      dateFormat="yyyy-MM-dd"
+      dayClassName={getDayClass}
+      className={className}
+      onKeyDown={onKeyDown}
+      readOnly={readOnly}
+      placeholderText={placeholder || 'yyyy-mm-dd'}
+      popperProps={{ strategy: 'fixed' }}
+      portalId="root"
+      showMonthDropdown
+      showYearDropdown
+      dropdownMode="select"
+    />
+  );
+}
 
 const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh C.", "Lokesh", "Jay", "Mahender","Anil"];
 const TODAY = new Date().toLocaleDateString('sv'); // YYYY-MM-DD in local timezone
@@ -776,7 +842,7 @@ const result = [];
           <div className="header-controls">
             <div className="date-selector">
               <label>Report Date:</label>
-              <input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} />
+              <HolidayDatePicker value={reportDate} onChange={(e) => setReportDate(e.target.value)} />
             </div>
             <div className="bulk-actions">
               <button className={`secondary-btn orig-toggle-btn ${showOriginal ? 'toggle-active' : ''}`} title="Alt + D" onClick={() => setShowOriginal(p => !p)}>{showOriginal ? 'Hide Original' : 'Show Original'}</button>
@@ -951,9 +1017,9 @@ const result = [];
                 </div>
                 <div className="filter-item date-range-group">
                   <label>Ends:</label>
-                  <input type="date" value={filterDateRange.start} onChange={(e) => setFilterDateRange({...filterDateRange, start: e.target.value})} className="filter-date-input" />
+                  <HolidayDatePicker value={filterDateRange.start} onChange={(e) => setFilterDateRange({...filterDateRange, start: e.target.value})} className="filter-date-input" />
                   <span>–</span>
-                  <input type="date" value={filterDateRange.end} onChange={(e) => setFilterDateRange({...filterDateRange, end: e.target.value})} className="filter-date-input" />
+                  <HolidayDatePicker value={filterDateRange.end} onChange={(e) => setFilterDateRange({...filterDateRange, end: e.target.value})} className="filter-date-input" />
                 </div>
                 {isFilterActive && <button className="clear-filters-btn" onClick={clearFilters}>Clear ×</button>}
               </div>
@@ -1105,7 +1171,7 @@ const result = [];
                             <div className="col date-col" onMouseEnter={() => setHoveredTaskId(task.id)} onMouseLeave={() => setHoveredTaskId(null)}>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', alignItems: 'stretch' }}>
                                 <div className={`cell-input ${task.startDate === displayReportDate ? 'date-highlight-red' : ''}`}>
-                                  <input type="date" value={task.startDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => !isReadOnly && syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'startDate', e.target.value) : t))} className="clean-input date-input" readOnly={isReadOnly} />
+                                  <HolidayDatePicker value={task.startDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => !isReadOnly && syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'startDate', e.target.value) : t))} className="clean-input date-input" readOnly={isReadOnly} />
                                 </div>
                                 {displayOrigStart && (
                                   <div style={{ display: 'flex', alignItems: 'center', fontSize: '10px', background: '#f1f5f9', borderRadius: '4px', padding: '1px 4px', border: '1px dashed #cbd5e1' }}>
@@ -1137,7 +1203,7 @@ const result = [];
                             <div className="col date-col" onMouseEnter={() => setHoveredTaskId(task.id)} onMouseLeave={() => setHoveredTaskId(null)}>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', width: '100%', alignItems: 'stretch' }}>
                                 <div className={`cell-input ${task.endDate === displayReportDate ? 'date-highlight-red' : ''}`}>
-                                  <input type="date" value={task.endDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => !isReadOnly && syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'endDate', e.target.value) : t))} className="clean-input date-input" readOnly={isReadOnly} />
+                                  <HolidayDatePicker value={task.endDate || ''} onKeyDown={(e) => handleKeyDown(e, originalIndex)} onChange={(e) => !isReadOnly && syncTasks(tasks.map(t => t.id === task.id ? updateDates(t, 'endDate', e.target.value) : t))} className="clean-input date-input" readOnly={isReadOnly} />
                                 </div>
                                 {displayOrigEnd && (
                                   <div style={{ display: 'flex', alignItems: 'center', fontSize: '10px', background: '#f1f5f9', borderRadius: '4px', padding: '1px 4px', border: '1px dashed #cbd5e1' }}>
