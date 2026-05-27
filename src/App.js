@@ -591,15 +591,15 @@ const result = [];
         else if (task.status === 'completed') statusText = 'COMPLETED';
         else if (task.status === 'in progress') statusText = 'IN PROGRESS';
         else if (task.status === 'to be started') statusText = 'TO BE STARTED';
-        else statusText = '-';
+        else statusText = '';
       }
-      let startStr = formatDateShort(task.startDate);
+      let startStr = formatDateShort(task.startDate); if (startStr === '-') startStr = '';
       if (task.origStartDate && task.origStartDate !== task.startDate) startStr += `\n${formatDateShort(task.origStartDate)}`;
-      let daysStr = task.days || '-';
+      let daysStr = task.days || '';
       if (task.origDays && String(task.origDays) !== String(task.days)) daysStr += `\n${task.origDays}`;
-      let endStr = formatDateShort(task.endDate);
+      let endStr = formatDateShort(task.endDate); if (endStr === '-') endStr = '';
       if (task.origEndDate && task.origEndDate !== task.endDate) endStr += `\n${formatDateShort(task.origEndDate)}`;
-      return [wbsNum, indent + task.text, task.assignedTo.join(', ') || '-', statusText, startStr, daysStr, endStr, task.remarks || '-'];
+      return [wbsNum, indent + task.text, task.assignedTo.join(', ') || '', statusText, startStr, daysStr, endStr, task.remarks || ''];
     });
 
     autoTable(pdfDoc, {
