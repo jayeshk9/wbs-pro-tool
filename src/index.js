@@ -4,6 +4,14 @@ import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
 
+if (process.env.REACT_APP_SITE_TITLE) {
+  document.title = process.env.REACT_APP_SITE_TITLE;
+}
+if (process.env.REACT_APP_FAVICON) {
+  const link = document.querySelector("link[rel='icon']");
+  if (link) link.href = `/${process.env.REACT_APP_FAVICON}`;
+}
+
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
