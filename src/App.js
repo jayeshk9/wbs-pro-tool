@@ -322,88 +322,7 @@ function App() {
     setDragOverProjectId(null);
   };
 
-  // ONE-TIME DATA MIGRATION — splits current project into Common, Sector 1, Rotary, Admin
-  const segregateProjects = async () => {
-    if (!window.confirm(
-      'This will split the current data into 4 projects:\n' +
-      '• Common (Entrance, Bypass Road, Main Road, Sector 4)\n' +
-      '• Sector 1 (Sector 1 subtasks + 14 metre road)\n' +
-      '• Rotary (Rotary subtasks)\n' +
-      '• Admin (Admin subtasks + Fabrication)\n\n' +
-      'Continue? This cannot be undone.'
-    )) return;
 
-    const allTasks = [...tasks];
-
-    // Extract a top-level task and its full subtree by task name
-    const extractByName = (name) => {
-      const idx = allTasks.findIndex(
-        t => t.level === 0 && t.text.toLowerCase().includes(name.toLowerCase())
-      );
-      if (idx === -1) return { taskList: [], indices: new Set() };
-      const indices = new Set([idx]);
-      for (let i = idx + 1; i < allTasks.length; i++) {
-        if (allTasks[i].level > 0) indices.add(i);
-        else break;
-      }
-      return { taskList: [...indices].map(i => allTasks[i]), indices };
-    };
-
-    // Promote: drop level by 1 (level 1→0, level 2→1, etc.)
-    const promote = (taskList) => taskList.map(t => ({ ...t, level: Math.max(0, t.level - 1) }));
-
-    const sector1 = extractByName('Sector 1');
-    const road14  = extractByName('14 metre road');
-    const rotary  = extractByName('Rotary');
-    const admin   = extractByName('Admin');
-    const fabric  = extractByName('Fabrication');
-
-    const removedIndices = new Set([
-      ...sector1.indices, ...road14.indices,
-      ...rotary.indices,  ...admin.indices,
-      ...fabric.indices,
-    ]);
-
-    // Common: everything not moved out
-    const commonTasks = allTasks.filter((_, i) => !removedIndices.has(i));
-
-    // Sector 1 project: Sector 1's children promoted + 14 metre road subtree as-is
-    const sector1Tasks = [
-      ...promote(sector1.taskList.slice(1)),  // skip the parent "Sector 1" itself
-      ...road14.taskList,                      // 14 metre road stays at level 0
-    ];
-
-    // Rotary project: Rotary's children promoted
-    const rotaryTasks = promote(rotary.taskList.slice(1));
-
-    // Admin project: Admin's children promoted + Fabrication at level 0
-    const adminTasks = [
-      ...promote(admin.taskList.slice(1)),
-      ...fabric.taskList,
-    ];
-
-    const ts = Date.now();
-    const newProjects = [
-      { id: `proj-sector1-${ts}`,  name: 'Sector 1', tasks: sector1Tasks },
-      { id: `proj-rotary-${ts+1}`, name: 'Rotary',   tasks: rotaryTasks  },
-      { id: `proj-admin-${ts+2}`,  name: 'Admin',    tasks: adminTasks   },
-    ];
-
-    // Write new projects
-    for (let i = 0; i < newProjects.length; i++) {
-      const p = newProjects[i];
-      await setDoc(doc(db, 'projectsMeta', p.id), {
-        name: p.name, createdAt: new Date().toISOString(), order: projects.length + i
-      });
-      await setDoc(doc(db, 'projects', p.id), { tasks: p.tasks });
-    }
-
-    // Update current project to Common
-    await setDoc(doc(db, 'projectsMeta', activeProjectId), { name: 'Common' }, { merge: true });
-    syncTasks(commonTasks);
-
-    alert('Done! 4 projects created. Review each project and adjust as needed.');
-  };
 
   // AUTO-CAPITALIZE
   const capitalizeFirst = (str) => {
@@ -867,9 +786,6 @@ const result = [];
               <button className="secondary-btn" onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: true}))})) : syncTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
               <button className="secondary-btn" onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: false}))})) : syncTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
               <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && syncTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', statusType: 'text', tillYest: '', today: '', totalTarget: '', origStartDate: '', origDays: '', origEndDate: '' }])}>Clear All</button>
-              {projects.length === 1 && (
-                <button className="secondary-btn migrate-btn" onClick={segregateProjects} title="Split current data into Common, Sector 1, Rotary, Admin projects">Migrate Data</button>
-              )}
             </div>
           </div>
         </div>
