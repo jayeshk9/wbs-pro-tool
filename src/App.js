@@ -83,7 +83,7 @@ function App() {
     const unsubscribe = onSnapshot(collection(db, 'projectsMeta'), (snap) => {
       if (snap.empty) {
         setDoc(doc(db, 'projectsMeta', 'main-project'), {
-          name: 'Ajmer Estate Project',
+          name: 'Project 1',
           createdAt: new Date().toISOString(),
           order: 0
         });
