@@ -73,6 +73,30 @@ input[type="number"] {
   flex-shrink: 0;
 }
 .snapshot-back-btn:hover { background: #d97706; }
+.snapshot-restore-btn {
+  background: #16a34a;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.snapshot-restore-btn:hover { background: #15803d; }
+.history-restore-btn {
+  background: #16a34a;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.history-restore-btn:hover { opacity: 1; background: #15803d; }
 
 /* History modal */
 .history-overlay {

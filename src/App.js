@@ -147,11 +147,13 @@ function App() {
 
   const saveVersion = async (tasksSnapshot, reportDateSnapshot) => {
     try {
+      const projectName = projects.find(p => p.id === activeProjectId)?.name || '';
       await addDoc(collection(db, 'versions'), {
         savedAt: new Date().toISOString(),
         reportDate: reportDateSnapshot,
         tasks: tasksSnapshot,
         projectId: activeProjectId,
+        projectName,
       });
     } catch (e) {
       console.error('Failed to save version:', e);
@@ -949,6 +951,7 @@ const result = [];
         {viewingVersion && (
           <div className="snapshot-banner">
             <span>Viewing snapshot — Report {formatDateShort(viewingVersion.reportDate)} &nbsp;·&nbsp; saved {new Date(viewingVersion.savedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+            <button className="snapshot-restore-btn" onClick={() => { if (window.confirm('Restore this snapshot as live data? Current data will be overwritten.')) { syncTasks(viewingVersion.tasks); setViewingVersion(null); } }}>↺ Restore</button>
             <button className="snapshot-back-btn" onClick={() => setViewingVersion(null)}>← Back to Live</button>
           </div>
         )}
@@ -1350,10 +1353,13 @@ const result = [];
                 historyVersions.map(v => (
                   <div key={v.id} className={`history-item ${viewingVersion?.id === v.id ? 'history-item-active' : ''}`} onClick={() => { setViewingVersion(v); setShowHistory(false); }}>
                     <div className="history-item-info">
-                      <div className="history-item-report">Report {formatDateShort(v.reportDate)}</div>
+                      <div className="history-item-report">{v.projectName ? `${v.projectName} — ` : ''}Report {formatDateShort(v.reportDate)}</div>
                       <div className="history-item-saved">Saved {new Date(v.savedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
                     </div>
-                    <button className="history-delete-btn" title="Delete snapshot" onClick={(e) => deleteVersion(e, v.id)}>🗑</button>
+                    <div style={{display:'flex', gap:'6px'}}>
+                      <button className="history-restore-btn" title="Restore this snapshot" onClick={(e) => { e.stopPropagation(); if (window.confirm('Restore this snapshot as live data for the current project? Current data will be overwritten.')) { syncTasks(v.tasks); setShowHistory(false); setViewingVersion(null); } }}>↺</button>
+                      <button className="history-delete-btn" title="Delete snapshot" onClick={(e) => deleteVersion(e, v.id)}>🗑</button>
+                    </div>
                   </div>
                 ))
               )}
