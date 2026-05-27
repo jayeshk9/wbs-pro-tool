@@ -193,6 +193,7 @@ function App() {
 
   // Ref always holds the latest closures for use in the stable keydown handler
   const shortcutRef = useRef({});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     shortcutRef.current = {
       handlePrintPDF, handleCombinedReport, loadHistory,
