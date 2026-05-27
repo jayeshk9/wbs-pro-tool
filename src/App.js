@@ -7,6 +7,7 @@ import { doc, onSnapshot, setDoc, getDoc, collection, addDoc, getDocs, query, or
 import './App.css';
 
 const ASSIGNED_OPTIONS = ["Sunny", "Kamlesh", "Satyanarayan", "Pradeep", "Yogesh", "Naresh C.", "Lokesh", "Jay", "Mahender","Anil"];
+const TODAY = new Date().toLocaleDateString('sv'); // YYYY-MM-DD in local timezone
 const STATUS_OPTIONS = ["-", "to be started", "in progress", "completed", "stuck"];
 const ALL_STATUS_FILTER_OPTIONS = [...STATUS_OPTIONS, 'fraction'];
 const DEFAULT_STATUS_FILTER = ALL_STATUS_FILTER_OPTIONS.filter(s => s !== 'completed');
@@ -62,6 +63,14 @@ function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [historyVersions, setHistoryVersions] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  const [showCompletedSection, setShowCompletedSection] = useState(false);
+  const [completedCollapsedIds, setCompletedCollapsedIds] = useState(new Set());
+  const toggleCompletedCollapse = (id) => setCompletedCollapsedIds(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
 
   // Filter States
   const [filterSupervisors, setFilterSupervisors] = useState([]);
@@ -432,13 +441,20 @@ function App() {
   const displayTasks = viewingVersion ? viewingVersion.tasks : tasks;
   const displayReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
 
+  const isStatusDefault = filterStatuses.length === DEFAULT_STATUS_FILTER.length && DEFAULT_STATUS_FILTER.every(s => filterStatuses.includes(s));
+
   const filteredTasks = useMemo(() => {
+    const statusDefault = filterStatuses.length === DEFAULT_STATUS_FILTER.length && DEFAULT_STATUS_FILTER.every(s => filterStatuses.includes(s));
     return displayTasks.map((task, originalIndex) => ({ ...task, originalIndex })).filter(task => {
       const matchSup = filterSupervisors.length === 0 || task.assignedTo.some(s => filterSupervisors.includes(s));
       let matchStatus = true;
       if (filterStatuses.length > 0) {
         const currentStatusVal = task.statusType === 'fraction' ? 'fraction' : task.status;
-        matchStatus = filterStatuses.includes(currentStatusVal);
+        if (statusDefault && currentStatusVal === 'completed') {
+          matchStatus = task.completedAt === TODAY;
+        } else {
+          matchStatus = filterStatuses.includes(currentStatusVal);
+        }
       }
       const matchLevel = filterLevels.length === 0 || filterLevels.includes(task.level);
       let matchDate = true;
@@ -449,22 +465,124 @@ function App() {
     });
   }, [displayTasks, filterSupervisors, filterStatuses, filterLevels, filterDateRange]);
 
-  const isStatusDefault = filterStatuses.length === DEFAULT_STATUS_FILTER.length && DEFAULT_STATUS_FILTER.every(s => filterStatuses.includes(s));
   const isFilterActive = filterSupervisors.length > 0 || !isStatusDefault || filterLevels.length > 0 || !!(filterDateRange.start && filterDateRange.end);
-  const isDragFilterActive = filteredTasks.length < displayTasks.length;
+  // Drag is allowed when only the status filter deviates (no level/supervisor/date filters)
+  const isOnlyStatusDiff = isFilterActive && !isStatusDefault && filterSupervisors.length === 0 && filterLevels.length === 0 && !(filterDateRange.start && filterDateRange.end);
+
+  // visibleTasks: only tasks that are actually rendered (collapse-hidden removed, consecutive DnD indices)
+  const visibleTasks = useMemo(() => {
+    if (isFilterActive && !isOnlyStatusDiff) return filteredTasks;
+    return filteredTasks.filter(task => {
+      const idx = task.originalIndex;
+      for (let i = 0; i < idx; i++) {
+        if (displayTasks[i].isCollapsed) {
+          const lvl = displayTasks[i].level;
+          let end = i + 1;
+          while (end < displayTasks.length && displayTasks[end].level > lvl) end++;
+          if (idx > i && idx <= end - 1) return false;
+        }
+      }
+      return true;
+    });
+  }, [filteredTasks, isFilterActive, isOnlyStatusDiff, displayTasks]);
+
+  // displayList: visibleTasks + ghost ancestor rows injected when filter is active (but not for status-only diff)
+  const displayList = useMemo(() => {
+    let di = 0;
+    if (!isFilterActive || isOnlyStatusDiff) return visibleTasks.map(t => ({ ...t, draggableIdx: di++ }));
+const result = [];
+    const seenIds = new Set();
+    const visibleIds = new Set(visibleTasks.map(t => t.id));
+    for (const task of visibleTasks) {
+      const ancestors = [];
+      let targetLvl = task.level - 1;
+      for (let i = task.originalIndex - 1; i >= 0 && targetLvl >= 0; i--) {
+        if (displayTasks[i].level === targetLvl) {
+          if (!visibleIds.has(displayTasks[i].id)) {
+            ancestors.unshift({ ...displayTasks[i], originalIndex: i, isGhost: true, draggableIdx: -1 });
+          }
+          targetLvl--;
+        }
+      }
+      for (const anc of ancestors) {
+        if (!seenIds.has(anc.id)) { seenIds.add(anc.id); result.push(anc); }
+      }
+      result.push({ ...task, draggableIdx: di++ });
+    }
+    return result;
+  }, [visibleTasks, isFilterActive, isOnlyStatusDiff, displayTasks]);
 
   const currentProjectName = projects.find(p => p.id === activeProjectId)?.name || 'WBS Project';
 
+  // Completed tasks section: completed tasks not completed today (archived)
+  const completedTasksForSection = useMemo(() => {
+    if (viewingVersion) return [];
+    return displayTasks
+      .map((task, i) => ({ ...task, originalIndex: i }))
+      .filter(task => task.status === 'completed' && task.completedAt !== TODAY);
+  }, [displayTasks, viewingVersion]);
+
+  const completedDisplayList = useMemo(() => {
+    if (!completedTasksForSection.length) return [];
+    const result = [];
+    const seenIds = new Set();
+    const completedIds = new Set(completedTasksForSection.map(t => t.id));
+    for (const task of completedTasksForSection) {
+      if (seenIds.has(task.id)) continue;
+      const ancestors = [];
+      let targetLvl = task.level - 1;
+      for (let i = task.originalIndex - 1; i >= 0 && targetLvl >= 0; i--) {
+        if (displayTasks[i].level === targetLvl) {
+          if (!seenIds.has(displayTasks[i].id)) {
+            ancestors.unshift({ ...displayTasks[i], originalIndex: i, isGhost: !completedIds.has(displayTasks[i].id) });
+          }
+          targetLvl--;
+        }
+      }
+      for (const anc of ancestors) { seenIds.add(anc.id); result.push(anc); }
+      seenIds.add(task.id);
+      result.push(task);
+    }
+    return result;
+  }, [completedTasksForSection, displayTasks]);
+
+  // Pre-compute which tasks are hidden in the completed section due to collapsed ancestors
+  // Uses completedCollapsedIds (local to completed section) — independent of main WBS state
+  const completedHiddenIds = useMemo(() => {
+    const hiddenSet = new Set();
+    for (let idx = 0; idx < completedDisplayList.length; idx++) {
+      const task = completedDisplayList[idx];
+      for (let i = idx - 1; i >= 0; i--) {
+        const prev = completedDisplayList[i];
+        if (prev.level < task.level) {
+          if (completedCollapsedIds.has(prev.id) || hiddenSet.has(prev.id)) hiddenSet.add(task.id);
+          break;
+        }
+      }
+    }
+    return hiddenSet;
+  }, [completedDisplayList, completedCollapsedIds]);
+
   // PDF EXPORT
-  const buildProjectTable = (pdfDoc, effectiveTasks, projectName, effectiveReportDate) => {
+  const buildProjectTable = (pdfDoc, effectiveTasks, projectName, effectiveReportDate, wbsSource = null, filterInfo = null) => {
     const todayStr = formatDateShort(effectiveReportDate);
     pdfDoc.setFontSize(16);
     pdfDoc.text(`${projectName} Report`, 14, 15);
     pdfDoc.setFontSize(10);
     pdfDoc.text(`Date: ${todayStr}`, 14, 22);
+    let headerEndY = 28;
+    if (filterInfo) {
+      pdfDoc.setFontSize(8);
+      pdfDoc.setTextColor(90, 90, 90);
+      pdfDoc.text(`Filters: ${filterInfo}`, 14, 28);
+      pdfDoc.setTextColor(0, 0, 0);
+      headerEndY = 33;
+    }
 
     const tableData = effectiveTasks.map((task, index) => {
-      const wbsNum = generateWBSString(index, effectiveTasks);
+      const wbsNum = (wbsSource && task.originalIndex != null)
+        ? generateWBSString(task.originalIndex, wbsSource)
+        : generateWBSString(index, effectiveTasks);
       const indent = "        ".repeat(task.level);
       let statusText = '';
       if (task.statusType !== 'fraction') {
@@ -484,7 +602,7 @@ function App() {
     });
 
     autoTable(pdfDoc, {
-      startY: 30,
+      startY: headerEndY + 2,
       head: [['WBS', 'TASK DESCRIPTION', 'SUPERVISOR', 'STATUS', 'START', 'DAYS', 'END DATE', 'REMARKS']],
       body: tableData,
       theme: 'grid',
@@ -575,15 +693,26 @@ function App() {
 
   // Print current project
   const handlePrintPDF = () => {
-    const effectiveTasks = viewingVersion ? viewingVersion.tasks : tasks;
+    const effectiveTasksFull = viewingVersion ? viewingVersion.tasks : tasks;
     const effectiveReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
     const pdfDoc = new jsPDF('l', 'mm', 'a4');
-    buildProjectTable(pdfDoc, effectiveTasks, currentProjectName, effectiveReportDate);
+    if (viewingVersion) {
+      buildProjectTable(pdfDoc, effectiveTasksFull, currentProjectName, effectiveReportDate);
+    } else {
+      // filteredTasks already applies TODAY filter + any active filters; originalIndex enables correct WBS
+      const filterParts = [];
+      if (filterSupervisors.length > 0) filterParts.push(`Supervisors: ${filterSupervisors.join(', ')}`);
+      if (!isStatusDefault) filterParts.push(`Status: ${filterStatuses.join(', ')}`);
+      if (filterLevels.length > 0) filterParts.push(`Levels: ${filterLevels.map(l => `L${l}`).join(', ')}`);
+      if (filterDateRange.start && filterDateRange.end) filterParts.push(`End: ${filterDateRange.start} – ${filterDateRange.end}`);
+      const filterInfo = filterParts.length > 0 ? filterParts.join('  |  ') : null;
+      buildProjectTable(pdfDoc, filteredTasks, currentProjectName, effectiveReportDate, effectiveTasksFull, filterInfo);
+      saveVersion(tasks, reportDate);
+    }
     pdfDoc.save(`WBS_${currentProjectName.replace(/\s+/g, '_')}_${effectiveReportDate}.pdf`);
-    if (!viewingVersion) saveVersion(tasks, reportDate);
   };
 
-  // Combined report: all projects in tab order
+  // Combined report: all projects, always excludes completed tasks (except completed today)
   const handleCombinedReport = async () => {
     const effectiveReportDate = reportDate;
     const pdfDoc = new jsPDF('l', 'mm', 'a4');
@@ -597,7 +726,10 @@ function App() {
         const snap = await getDoc(doc(db, 'projects', p.id));
         projectTasks = snap.exists() ? snap.data().tasks || [] : [];
       }
-      buildProjectTable(pdfDoc, projectTasks, p.name, effectiveReportDate);
+      const filteredForReport = projectTasks
+        .map((t, i) => ({ ...t, originalIndex: i }))
+        .filter(t => t.status !== 'completed' || t.completedAt === TODAY);
+      buildProjectTable(pdfDoc, filteredForReport, p.name, effectiveReportDate, projectTasks);
     }
     pdfDoc.save(`WBS_Combined_Report_${effectiveReportDate}.pdf`);
     saveVersion(tasks, reportDate);
@@ -649,7 +781,8 @@ function App() {
       assignedTo: [], status: '-', statusType: 'text',
       tillYest: '', today: '', totalTarget: '',
       startDate: '', days: '', endDate: '', remarks: '',
-      origStartDate: '', origDays: '', origEndDate: ''
+      origStartDate: '', origDays: '', origEndDate: '',
+      taskSeq: tasks.reduce((max, t) => Math.max(max, t.taskSeq || 0), 0) + 1,
     });
     syncTasks(newTasks);
     setFocusId(newId);
@@ -697,7 +830,10 @@ function App() {
         }
         let finalValue = value;
         if (field === 'text' || field === 'remarks') finalValue = capitalizeFirst(value);
-        return { ...t, [field]: finalValue };
+        const updated = { ...t, [field]: finalValue };
+        if (field === 'status') updated.completedAt = value === 'completed' ? TODAY : null;
+        if (field === 'statusType') updated.completedAt = null; // switching to fraction clears completion
+        return updated;
       }
       return t;
     }));
@@ -822,9 +958,9 @@ function App() {
         <DragDropContext onDragEnd={(result) => {
           if (!result.destination) return;
           if (viewingVersion) return;
-          if (isFilterActive) return;
-          const sTask = filteredTasks[result.source.index];
-          const dTask = filteredTasks[result.destination.index];
+          if (isFilterActive && !isOnlyStatusDiff) return;
+          const sTask = visibleTasks[result.source.index];
+          const dTask = visibleTasks[result.destination.index];
           if (!sTask || !dTask) return;
           const sIdx = sTask.originalIndex;
           const dIdx = dTask.originalIndex;
@@ -934,16 +1070,33 @@ function App() {
             <Droppable droppableId="wbs-list">
               {(provided) => (
                 <div {...provided.droppableProps} ref={provided.innerRef}>
-                  {filteredTasks.map((task, fIndex) => {
+                  {displayList.map((task) => {
                     const originalIndex = task.originalIndex;
-                    if (!isFilterActive) {
-                      let visible = true;
-                      for (let i = 0; i < originalIndex; i++) {
-                        if (displayTasks[i].isCollapsed && originalIndex > i && originalIndex <= getSubtaskRange(i, displayTasks)) visible = false;
-                      }
-                      if (!visible) return null;
-                    }
                     const hasChildren = originalIndex < displayTasks.length - 1 && displayTasks[originalIndex + 1].level > task.level;
+
+                    if (task.isGhost) {
+                      return (
+                        <div key={`ghost-${task.id}`} className={`wbs-row ghost-row level-${task.level}`}>
+                          <div className="col drag-handle drag-disabled">⠿</div>
+                          <div className="col num-col ghost-num">
+                            <div className="wbs-num-wrapper">
+                              <span>{generateWBSString(originalIndex, displayTasks)}</span>
+                              <span className="task-seq-id">#{task.taskSeq || originalIndex + 1}</span>
+                            </div>
+                          </div>
+                          <div className="col task-col">
+                            <div className="task-input-wrapper" style={{ paddingLeft: `${task.level * 24}px` }}>
+                              <span className={`collapse-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} style={{ cursor: 'default' }}>
+                                {task.isCollapsed ? '▶' : '▼'}
+                              </span>
+                              <span className="ghost-task-name">{task.text || 'Unnamed'}</span>
+                            </div>
+                          </div>
+                          <div className="col assigned-col" /><div className="col status-col" /><div className="col date-col" /><div className="col day-col" /><div className="col date-col" /><div className="col remarks-col" /><div className="col action-col" />
+                        </div>
+                      );
+                    }
+
                     const isReadOnly = !!viewingVersion;
                     const isMenuOpen = activeMenu?.id === task.id;
                     const showBlueAccent = task.level === 0 || (hasChildren && task.isCollapsed);
@@ -963,11 +1116,16 @@ function App() {
                       expTodayDisplay = daysFromStart > 0 ? Math.min(daysFromStart * expRate, totTarget).toFixed(1) : '0';
                     }
                     return (
-                      <Draggable key={task.id} draggableId={task.id} index={fIndex} isDragDisabled={isFilterActive || !!viewingVersion}>
+                      <Draggable key={task.id} draggableId={task.id} index={task.draggableIdx} isDragDisabled={(isFilterActive && !isOnlyStatusDiff) || !!viewingVersion}>
                         {(provided) => (
                           <div ref={provided.innerRef} {...provided.draggableProps} onKeyDown={(e) => handleKeyDown(e, originalIndex)} className={`wbs-row level-${task.level} ${showBlueAccent ? 'blue-accent' : ''} ${isMenuOpen ? 'z-top' : ''}`}>
-                            <div {...provided.dragHandleProps} className="col drag-handle">⠿</div>
-                            <div className="col num-col">{generateWBSString(originalIndex, displayTasks)}</div>
+                            <div {...provided.dragHandleProps} className={`col drag-handle ${(isFilterActive && !isOnlyStatusDiff) || !!viewingVersion ? 'drag-disabled' : ''}`}>⠿</div>
+                            <div className="col num-col">
+                              <div className="wbs-num-wrapper">
+                                <span>{generateWBSString(originalIndex, displayTasks)}</span>
+                                <span className="task-seq-id">#{task.taskSeq || originalIndex + 1}</span>
+                              </div>
+                            </div>
                             <div className="col task-col">
                               <div className="task-input-wrapper" style={{ paddingLeft: `${task.level * 24}px` }}>
                                 <button className={`collapse-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => t.id === task.id ? {...t, isCollapsed: !t.isCollapsed} : t)})) : toggleSelection(task.id, 'isCollapsed', !task.isCollapsed)}>
@@ -1086,6 +1244,91 @@ function App() {
             </Droppable>
           </div>
         </DragDropContext>
+
+        {/* Completed Tasks Section */}
+        {!viewingVersion && completedDisplayList.length > 0 && (
+          <div className="completed-section">
+            <div className="completed-section-header" onClick={() => setShowCompletedSection(v => !v)}>
+              <span className="completed-section-chevron">{showCompletedSection ? '▼' : '▶'}</span>
+              <span className="completed-section-title">Completed Tasks</span>
+              <span className="completed-section-count">({completedTasksForSection.length})</span>
+            </div>
+            {showCompletedSection && (
+              <div className="completed-section-body">
+                <div className="wbs-row header-row">
+                  <div className="col drag-handle-placeholder"></div>
+                  <div className="col num-col">WBS</div>
+                  <div className="col task-col">TASK DESCRIPTION</div>
+                  <div className="col assigned-col">SUPERVISOR</div>
+                  <div className="col status-col">STATUS</div>
+                  <div className="col date-col">START</div>
+                  <div className="col day-col">DAYS</div>
+                  <div className="col date-col">END DATE</div>
+                  <div className="col remarks-col">REMARKS</div>
+                  <div className="col action-col"></div>
+                </div>
+                {completedDisplayList.map((task) => {
+                  if (completedHiddenIds.has(task.id)) return null;
+                  const originalIndex = task.originalIndex;
+                  const hasChildren = originalIndex < displayTasks.length - 1 && displayTasks[originalIndex + 1]?.level > task.level;
+
+                  if (task.isGhost) {
+                    return (
+                      <div key={`cghost-${task.id}`} className={`wbs-row ghost-row level-${task.level}`}>
+                        <div className="col drag-handle drag-disabled" style={{ opacity: 0 }}>⠿</div>
+                        <div className="col num-col ghost-num">
+                          <div className="wbs-num-wrapper">
+                            <span>{generateWBSString(originalIndex, displayTasks)}</span>
+                            <span className="task-seq-id">#{task.taskSeq || originalIndex + 1}</span>
+                          </div>
+                        </div>
+                        <div className="col task-col">
+                          <div className="task-input-wrapper" style={{ paddingLeft: `${task.level * 24}px` }}>
+                            <button className={`collapse-toggle completed-ghost-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} onClick={() => toggleCompletedCollapse(task.id)}>
+                              {completedCollapsedIds.has(task.id) ? '▶' : '▼'}
+                            </button>
+                            <span className="ghost-task-name">{task.text || 'Unnamed'}</span>
+                          </div>
+                        </div>
+                        <div className="col assigned-col" /><div className="col status-col" /><div className="col date-col" /><div className="col day-col" /><div className="col date-col" /><div className="col remarks-col" /><div className="col action-col" />
+                      </div>
+                    );
+                  }
+
+                  const showBlueAccent = task.level === 0 || (hasChildren && task.isCollapsed);
+                  return (
+                    <div key={`completed-${task.id}`} className={`wbs-row level-${task.level} ${showBlueAccent ? 'blue-accent' : ''} completed-task-row`}>
+                      <div className="col drag-handle drag-disabled" style={{ opacity: 0 }}>⠿</div>
+                      <div className="col num-col">
+                        <div className="wbs-num-wrapper">
+                          <span>{generateWBSString(originalIndex, displayTasks)}</span>
+                          <span className="task-seq-id">#{task.taskSeq || originalIndex + 1}</span>
+                        </div>
+                      </div>
+                      <div className="col task-col">
+                        <div className="task-input-wrapper" style={{ paddingLeft: `${task.level * 24}px` }}>
+                          <button className={`collapse-toggle arrow-level-${task.level} ${hasChildren ? '' : 'hidden'}`} onClick={() => toggleCompletedCollapse(task.id)}>
+                            {completedCollapsedIds.has(task.id) ? '▶' : '▼'}
+                          </button>
+                          <span className="completed-task-name">{task.text}</span>
+                        </div>
+                      </div>
+                      <div className="col assigned-col completed-data-cell"><span className="completed-cell-text">{task.assignedTo?.join(', ') || '-'}</span></div>
+                      <div className="col status-col completed-status-cell"><span className="status-badge status-text-completed">completed</span></div>
+                      <div className="col date-col completed-data-cell"><span className="completed-cell-text">{task.startDate || '-'}</span></div>
+                      <div className="col day-col completed-data-cell"><span className="completed-cell-text">{task.days || '-'}</span></div>
+                      <div className="col date-col completed-data-cell"><span className="completed-cell-text">{task.endDate || '-'}</span></div>
+                      <div className="col remarks-col completed-data-cell"><span className="completed-cell-text">{task.remarks || ''}</span></div>
+                      <div className="col action-col completed-data-cell">
+                        <button className="restore-btn" title="Restore task" onClick={() => toggleSelection(task.id, 'status', '-')}>↺</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
       </div>
 
