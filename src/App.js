@@ -700,7 +700,7 @@ const result = [];
           }
           let hasDiff = false, line1 = '', line2 = '';
           if (c === 4 && task.origStartDate && task.origStartDate !== task.startDate) { hasDiff = true; line1 = formatDateShort(task.startDate); line2 = formatDateShort(task.origStartDate); }
-          else if (c === 5 && task.origDays && String(task.origDays) !== String(task.days)) { hasDiff = true; line1 = task.days || '-'; line2 = String(task.origDays); }
+          else if (c === 5 && task.origDays && String(task.origDays) !== String(task.days)) { hasDiff = true; line1 = String(task.days || '-'); line2 = String(task.origDays); }
           else if (c === 6 && task.origEndDate && task.origEndDate !== task.endDate) { hasDiff = true; line1 = formatDateShort(task.endDate); line2 = formatDateShort(task.origEndDate); }
           if (hasDiff) {
             const isHL = (c === 4 && task.startDate === effectiveReportDate) || (c === 6 && task.endDate === effectiveReportDate);
