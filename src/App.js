@@ -176,10 +176,25 @@ function App() {
   // 2. TASKS LISTENER
   useEffect(() => {
     if (!activeProjectId) return;
+    setTasks([]); // clear immediately so addTask can't inherit previous project's taskSeq
     const docRef = doc(db, 'projects', activeProjectId);
     const unsubscribe = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
-        setTasks(snapshot.data().tasks);
+        let loadedTasks = snapshot.data().tasks;
+        // Fix race-condition bug: if taskSeq values don't start at 1, renumber them
+        const seqs = loadedTasks.map(t => t.taskSeq).filter(s => s != null && s > 0);
+        if (seqs.length > 0) {
+          const minSeq = Math.min(...seqs);
+          if (minSeq > 1) {
+            const offset = minSeq - 1;
+            loadedTasks = loadedTasks.map(t => ({
+              ...t,
+              ...(t.taskSeq != null ? { taskSeq: t.taskSeq - offset } : {})
+            }));
+            setDoc(docRef, { tasks: loadedTasks }, { merge: true });
+          }
+        }
+        setTasks(loadedTasks);
       } else {
         const defaultTask = [{
           id: `initial-${Date.now()}`, text: 'Project Start', level: 0, isCollapsed: false,
@@ -431,9 +446,20 @@ function App() {
 
   const isStatusDefault = filterStatuses.length === DEFAULT_STATUS_FILTER.length && DEFAULT_STATUS_FILTER.every(s => filterStatuses.includes(s));
 
+  // WBS numbering excludes old completed tasks so active tasks always number from 1
+  const wbsTasks = useMemo(() =>
+    displayTasks.filter(t => t.status !== 'completed' || t.completedAt === TODAY),
+    [displayTasks]
+  );
+
   const filteredTasks = useMemo(() => {
     const statusDefault = filterStatuses.length === DEFAULT_STATUS_FILTER.length && DEFAULT_STATUS_FILTER.every(s => filterStatuses.includes(s));
-    return displayTasks.map((task, originalIndex) => ({ ...task, originalIndex })).filter(task => {
+    const wbsIndexMap = new Map(wbsTasks.map((t, i) => [t.id, i]));
+    return displayTasks.map((task, originalIndex) => ({
+      ...task,
+      originalIndex,
+      wbsIndex: wbsIndexMap.has(task.id) ? wbsIndexMap.get(task.id) : originalIndex,
+    })).filter(task => {
       const matchSup = filterSupervisors.length === 0 || task.assignedTo.some(s => filterSupervisors.includes(s));
       let matchStatus = true;
       if (filterStatuses.length > 0) {
@@ -451,7 +477,7 @@ function App() {
       }
       return matchSup && matchStatus && matchLevel && matchDate;
     });
-  }, [displayTasks, filterSupervisors, filterStatuses, filterLevels, filterDateRange]);
+  }, [displayTasks, filterSupervisors, filterStatuses, filterLevels, filterDateRange, wbsTasks]);
 
   const isFilterActive = filterSupervisors.length > 0 || !isStatusDefault || filterLevels.length > 0 || !!(filterDateRange.start && filterDateRange.end);
   // Drag is allowed when only the status filter deviates (no level/supervisor/date filters)
@@ -834,6 +860,14 @@ const result = [];
     toggleSelection(id, 'remarks', target.value);
   };
 
+  // Auto-resize all remarks textareas on load and whenever tasks change
+  useEffect(() => {
+    document.querySelectorAll('.remarks-textarea').forEach(el => {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    });
+  }, [tasks]);
+
   return (
     <div className="App">
       <header className="header">
@@ -1108,7 +1142,7 @@ const result = [];
                             <div {...provided.dragHandleProps} className={`col drag-handle ${(isFilterActive && !isOnlyStatusDiff) || !!viewingVersion ? 'drag-disabled' : ''}`}>⠿</div>
                             <div className="col num-col">
                               <div className="wbs-num-wrapper">
-                                <span>{generateWBSString(originalIndex, displayTasks)}</span>
+                                <span>{generateWBSString(task.wbsIndex, wbsTasks)}</span>
                                 <span className="task-seq-id">#{task.taskSeq || originalIndex + 1}</span>
                               </div>
                             </div>
