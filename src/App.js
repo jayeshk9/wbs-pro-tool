@@ -38,6 +38,18 @@ const EID_DATES = new Set([
   '2024-06-17','2025-06-07','2026-05-28',
 ]);
 
+function CalendarWithLegend({ className, children }) {
+  return (
+    <div className={className} style={{ display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1 }}>{children}</div>
+      <div className="dp-legend">
+        <span><span className="dp-legend-dot dp-legend-amawas" />Amawas</span>
+        <span><span className="dp-legend-dot dp-legend-eid" />Eid</span>
+      </div>
+    </div>
+  );
+}
+
 function HolidayDatePicker({ value, onChange, className, readOnly, onKeyDown, placeholder }) {
   const selected = value ? new Date(value + 'T00:00:00') : null;
 
@@ -68,6 +80,8 @@ function HolidayDatePicker({ value, onChange, className, readOnly, onKeyDown, pl
       showMonthDropdown
       showYearDropdown
       dropdownMode="select"
+      fixedHeight
+      calendarContainer={CalendarWithLegend}
     />
   );
 }
