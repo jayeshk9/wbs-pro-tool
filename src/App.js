@@ -57,12 +57,12 @@ function HolidayDatePicker({ value, onChange, className, readOnly, onKeyDown, pl
     <DatePicker
       selected={selected}
       onChange={handleChange}
-      dateFormat="yyyy-MM-dd"
+      dateFormat="dd-MM-yyyy"
       dayClassName={getDayClass}
       className={className}
       onKeyDown={onKeyDown}
       readOnly={readOnly}
-      placeholderText={placeholder || 'yyyy-mm-dd'}
+      placeholderText={placeholder || 'dd-mm-yyyy'}
       popperProps={{ strategy: 'fixed' }}
       portalId="root"
       showMonthDropdown

@@ -715,7 +715,7 @@ input[type="number"] {
   gap: 6px;
   padding: 0 16px;
   cursor: pointer;
-  color: rgba(255,255,255,0.5);
+  color: rgba(255,255,255,0.88);
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
