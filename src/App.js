@@ -143,6 +143,7 @@ function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [showCombinedModal, setShowCombinedModal] = useState(false);
   const [includeSupervisorReport, setIncludeSupervisorReport] = useState(true);
+  const [projectSupModalId, setProjectSupModalId] = useState(null);
   const [historyVersions, setHistoryVersions] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
@@ -369,6 +370,14 @@ function App() {
     setEditingProjectId(null);
     if (!trimmed) return;
     await setDoc(doc(db, 'projectsMeta', id), { name: trimmed }, { merge: true });
+  };
+
+  // Project-level supervisor (a project lead is treated as assigned to every task in the report)
+  const toggleProjectSupervisor = async (projectId, name) => {
+    const project = projects.find(p => p.id === projectId);
+    const current = project?.assignedTo || [];
+    const updated = current.includes(name) ? current.filter(v => v !== name) : [...current, name];
+    await setDoc(doc(db, 'projectsMeta', projectId), { assignedTo: updated }, { merge: true });
   };
 
   const deleteProject = async (id) => {
@@ -715,12 +724,13 @@ const result = [];
     };
   };
 
-  const buildProjectTable = (pdfDoc, effectiveTasks, projectName, effectiveReportDate, wbsSource = null, filterInfo = null) => {
+  const buildProjectTable = (pdfDoc, effectiveTasks, projectName, effectiveReportDate, wbsSource = null, filterInfo = null, leads = []) => {
     const todayStr = formatDateShort(effectiveReportDate);
     pdfDoc.setFontSize(16);
     pdfDoc.text(`${projectName} Report`, 14, 15);
     pdfDoc.setFontSize(10);
-    pdfDoc.text(`Date: ${todayStr}`, 14, 22);
+    const dateLine = leads && leads.length ? `Date: ${todayStr}    |    Project Lead: ${leads.join(', ')}` : `Date: ${todayStr}`;
+    pdfDoc.text(dateLine, 14, 22);
     let headerEndY = 28;
     if (filterInfo) {
       pdfDoc.setFontSize(8);
@@ -806,7 +816,8 @@ const result = [];
       if (filterLevels.length > 0) filterParts.push(`Levels: ${filterLevels.map(l => `L${l}`).join(', ')}`);
       if (filterDateRange.start && filterDateRange.end) filterParts.push(`End: ${filterDateRange.start} – ${filterDateRange.end}`);
       const filterInfo = filterParts.length > 0 ? filterParts.join('  |  ') : null;
-      buildProjectTable(pdfDoc, filteredTasks, currentProjectName, effectiveReportDate, effectiveTasksFull, filterInfo);
+      const activeLeads = projects.find(p => p.id === activeProjectId)?.assignedTo || [];
+      buildProjectTable(pdfDoc, filteredTasks, currentProjectName, effectiveReportDate, effectiveTasksFull, filterInfo, activeLeads);
       saveVersion(tasks, reportDate);
     }
     stampEstateHeader(pdfDoc);
@@ -840,7 +851,7 @@ const result = [];
       const filteredForReport = projectTasks
         .map((t, idx) => ({ ...t, originalIndex: idx }))
         .filter(t => t.status !== 'completed' || t.completedAt === TODAY);
-      buildProjectTable(pdfDoc, filteredForReport, project.name, effectiveReportDate, projectTasks);
+      buildProjectTable(pdfDoc, filteredForReport, project.name, effectiveReportDate, projectTasks, null, project.assignedTo || []);
     });
 
     // Per-supervisor reports
@@ -848,7 +859,14 @@ const result = [];
       for (const supervisorName of ASSIGNED_OPTIONS) {
         const sections = [];
         for (const { project, tasks: projectTasks } of projectData) {
-          const subset = buildSupervisorSubset(projectTasks, supervisorName);
+          // A project lead is treated as assigned to the whole project, so show every active task;
+          // otherwise just their own tasks plus parent/child context.
+          const leadsProject = (project.assignedTo || []).includes(supervisorName);
+          const subset = leadsProject
+            ? projectTasks
+                .map((t, idx) => ({ ...t, originalIndex: idx }))
+                .filter(t => t.status !== 'completed' || t.completedAt === TODAY)
+            : buildSupervisorSubset(projectTasks, supervisorName);
           if (subset.length > 0) sections.push({ projectName: project.name, subset, wbsSource: projectTasks });
         }
         if (sections.length === 0) continue;
@@ -1046,6 +1064,11 @@ const result = [];
                     {p.name}
                   </span>
                 )}
+                <button
+                  className={`project-tab-lead ${(p.assignedTo?.length) ? 'has-lead' : ''}`}
+                  title="Assign project supervisor(s) — leads see the whole project in their report"
+                  onClick={(e) => { e.stopPropagation(); setProjectSupModalId(p.id); }}
+                >👤{p.assignedTo?.length ? ` ${p.assignedTo.length}` : ''}</button>
                 {projects.length > 1 && (
                   <button
                     className="project-tab-delete"
@@ -1525,6 +1548,33 @@ const result = [];
           </div>
         </div>
       )}
+
+      {projectSupModalId && (() => {
+        const proj = projects.find(p => p.id === projectSupModalId);
+        if (!proj) return null;
+        const leads = proj.assignedTo || [];
+        return (
+          <div className="history-overlay" onClick={() => setProjectSupModalId(null)}>
+            <div className="history-modal combined-modal" onClick={e => e.stopPropagation()}>
+              <div className="history-modal-header">
+                <h2>Project Lead — {proj.name}</h2>
+                <button className="history-close-btn" onClick={() => setProjectSupModalId(null)}>×</button>
+              </div>
+              <div className="history-modal-body project-sup-body">
+                <p className="project-sup-hint">Supervisors assigned here lead the whole project — they see every task of <strong>{proj.name}</strong> in their supervisor report without being added to each task.</p>
+                {ASSIGNED_OPTIONS.map(opt => (
+                  <label key={opt} className="menu-item project-sup-item">
+                    <input type="checkbox" checked={leads.includes(opt)} onChange={() => toggleProjectSupervisor(proj.id, opt)} /> {opt}
+                  </label>
+                ))}
+              </div>
+              <div className="combined-modal-footer">
+                <button className="secondary-btn combined-btn" onClick={() => setProjectSupModalId(null)}>Done</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
