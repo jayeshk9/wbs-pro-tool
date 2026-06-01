@@ -141,6 +141,8 @@ function App() {
   const [hoveredTaskId, setHoveredTaskId] = useState(null);
   const [showOriginal, setShowOriginal] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showCombinedModal, setShowCombinedModal] = useState(false);
+  const [includeSupervisorReport, setIncludeSupervisorReport] = useState(true);
   const [historyVersions, setHistoryVersions] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
@@ -592,21 +594,8 @@ const result = [];
   }, [completedDisplayList, completedCollapsedIds]);
 
   // PDF EXPORT
-  const buildProjectTable = (pdfDoc, effectiveTasks, projectName, effectiveReportDate, wbsSource = null, filterInfo = null) => {
-    const todayStr = formatDateShort(effectiveReportDate);
-    pdfDoc.setFontSize(16);
-    pdfDoc.text(`${projectName} Report`, 14, 15);
-    pdfDoc.setFontSize(10);
-    pdfDoc.text(`Date: ${todayStr}`, 14, 22);
-    let headerEndY = 28;
-    if (filterInfo) {
-      pdfDoc.setFontSize(8);
-      pdfDoc.setTextColor(90, 90, 90);
-      pdfDoc.text(`Filters: ${filterInfo}`, 14, 28);
-      pdfDoc.setTextColor(0, 0, 0);
-      headerEndY = 33;
-    }
-
+  // Shared autoTable config builder so project tables and supervisor tables render identically
+  const buildTaskTableOptions = (pdfDoc, effectiveTasks, effectiveReportDate, wbsSource, startY) => {
     const tableData = effectiveTasks.map((task, index) => {
       const wbsNum = (wbsSource && task.originalIndex != null)
         ? generateWBSString(task.originalIndex, wbsSource)
@@ -629,8 +618,8 @@ const result = [];
       return [wbsNum, indent + task.text, task.assignedTo.join(', ') || '', statusText, startStr, daysStr, endStr, task.remarks || ''];
     });
 
-    autoTable(pdfDoc, {
-      startY: headerEndY + 2,
+    return {
+      startY,
       head: [['WBS', 'TASK DESCRIPTION', 'SUPERVISOR', 'STATUS', 'START', 'DAYS', 'END DATE', 'REMARKS']],
       body: tableData,
       theme: 'grid',
@@ -716,6 +705,68 @@ const result = [];
           }
         }
       }
+    };
+  };
+
+  const buildProjectTable = (pdfDoc, effectiveTasks, projectName, effectiveReportDate, wbsSource = null, filterInfo = null) => {
+    const todayStr = formatDateShort(effectiveReportDate);
+    pdfDoc.setFontSize(16);
+    pdfDoc.text(`${projectName} Report`, 14, 15);
+    pdfDoc.setFontSize(10);
+    pdfDoc.text(`Date: ${todayStr}`, 14, 22);
+    let headerEndY = 28;
+    if (filterInfo) {
+      pdfDoc.setFontSize(8);
+      pdfDoc.setTextColor(90, 90, 90);
+      pdfDoc.text(`Filters: ${filterInfo}`, 14, 28);
+      pdfDoc.setTextColor(0, 0, 0);
+      headerEndY = 33;
+    }
+    autoTable(pdfDoc, buildTaskTableOptions(pdfDoc, effectiveTasks, effectiveReportDate, wbsSource, headerEndY + 2));
+  };
+
+  // For a supervisor, gather their active tasks in a project plus ancestor (parent) and
+  // descendant (child) tasks so the WBS context around each assigned task is preserved.
+  const buildSupervisorSubset = (projectTasks, supervisorName) => {
+    const includeIdx = new Set();
+    for (let i = 0; i < projectTasks.length; i++) {
+      const t = projectTasks[i];
+      const assigned = (t.assignedTo || []).includes(supervisorName);
+      const activeForReport = t.status !== 'completed' || t.completedAt === TODAY;
+      if (!assigned || !activeForReport) continue;
+      // ancestors: walk back collecting each shallower level (the parent chain)
+      let curLevel = t.level;
+      for (let j = i - 1; j >= 0 && curLevel > 0; j--) {
+        if (projectTasks[j].level < curLevel) {
+          includeIdx.add(j);
+          curLevel = projectTasks[j].level;
+        }
+      }
+      includeIdx.add(i);
+      // descendants: every task nested under this one
+      const end = getSubtaskRange(i, projectTasks);
+      for (let k = i + 1; k <= end; k++) includeIdx.add(k);
+    }
+    return [...includeIdx].sort((a, b) => a - b).map(idx => ({ ...projectTasks[idx], originalIndex: idx }));
+  };
+
+  // Renders a per-supervisor page: a heading plus one task table per project they work on
+  const buildSupervisorReport = (pdfDoc, supervisorName, sections, effectiveReportDate) => {
+    const todayStr = formatDateShort(effectiveReportDate);
+    const pageHeight = pdfDoc.internal.pageSize.getHeight();
+    pdfDoc.setFontSize(16);
+    pdfDoc.text(`Supervisor Report — ${supervisorName}`, 14, 15);
+    pdfDoc.setFontSize(10);
+    pdfDoc.text(`Date: ${todayStr}`, 14, 22);
+    let cursorY = 30;
+    sections.forEach((section) => {
+      if (cursorY > pageHeight - 40) { pdfDoc.addPage(); cursorY = 20; }
+      pdfDoc.setFontSize(12);
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text(section.projectName, 14, cursorY);
+      pdfDoc.setFont('helvetica', 'normal');
+      autoTable(pdfDoc, buildTaskTableOptions(pdfDoc, section.subset, effectiveReportDate, section.wbsSource, cursorY + 3));
+      cursorY = pdfDoc.lastAutoTable.finalY + 12;
     });
   };
 
@@ -740,13 +791,17 @@ const result = [];
     pdfDoc.save(`WBS_${currentProjectName.replace(/\s+/g, '_')}_${effectiveReportDate}.pdf`);
   };
 
-  // Combined report: all projects, always excludes completed tasks (except completed today)
-  const handleCombinedReport = async () => {
+  // Combined report: all projects, always excludes completed tasks (except completed today).
+  // When withSupervisorReport is true, appends a per-supervisor page showing each
+  // supervisor's tasks (project-wise, with parent/child context) across all projects.
+  const handleCombinedReport = async (withSupervisorReport = true) => {
+    setShowCombinedModal(false);
     const effectiveReportDate = reportDate;
     const pdfDoc = new jsPDF('l', 'mm', 'a4');
-    for (let i = 0; i < projects.length; i++) {
-      if (i > 0) pdfDoc.addPage();
-      const p = projects[i];
+
+    // Fetch every project's tasks once so the main report and supervisor reports share data
+    const projectData = [];
+    for (const p of projects) {
       let projectTasks;
       if (p.id === activeProjectId) {
         projectTasks = tasks;
@@ -754,11 +809,32 @@ const result = [];
         const snap = await getDoc(doc(db, 'projects', p.id));
         projectTasks = snap.exists() ? snap.data().tasks || [] : [];
       }
-      const filteredForReport = projectTasks
-        .map((t, i) => ({ ...t, originalIndex: i }))
-        .filter(t => t.status !== 'completed' || t.completedAt === TODAY);
-      buildProjectTable(pdfDoc, filteredForReport, p.name, effectiveReportDate, projectTasks);
+      projectData.push({ project: p, tasks: projectTasks });
     }
+
+    // Main combined report — one page per project
+    projectData.forEach(({ project, tasks: projectTasks }, i) => {
+      if (i > 0) pdfDoc.addPage();
+      const filteredForReport = projectTasks
+        .map((t, idx) => ({ ...t, originalIndex: idx }))
+        .filter(t => t.status !== 'completed' || t.completedAt === TODAY);
+      buildProjectTable(pdfDoc, filteredForReport, project.name, effectiveReportDate, projectTasks);
+    });
+
+    // Per-supervisor reports
+    if (withSupervisorReport) {
+      for (const supervisorName of ASSIGNED_OPTIONS) {
+        const sections = [];
+        for (const { project, tasks: projectTasks } of projectData) {
+          const subset = buildSupervisorSubset(projectTasks, supervisorName);
+          if (subset.length > 0) sections.push({ projectName: project.name, subset, wbsSource: projectTasks });
+        }
+        if (sections.length === 0) continue;
+        pdfDoc.addPage();
+        buildSupervisorReport(pdfDoc, supervisorName, sections, effectiveReportDate);
+      }
+    }
+
     pdfDoc.save(`WBS_Combined_Report_${effectiveReportDate}.pdf`);
     saveVersion(tasks, reportDate);
   };
@@ -896,7 +972,7 @@ const result = [];
               <button className={`secondary-btn orig-toggle-btn ${showOriginal ? 'toggle-active' : ''}`} title="Alt + D" onClick={() => setShowOriginal(p => !p)}>{showOriginal ? 'Hide Original' : 'Show Original'}</button>
               <button className="secondary-btn history-btn" onClick={() => { setShowHistory(true); loadHistory(); }}>History</button>
               <button className="secondary-btn print-btn" onClick={handlePrintPDF}>Print PDF</button>
-              <button className="secondary-btn combined-btn" onClick={handleCombinedReport}>Combined Report</button>
+              <button className="secondary-btn combined-btn" onClick={() => { setIncludeSupervisorReport(true); setShowCombinedModal(true); }}>Combined Report</button>
               <button className="secondary-btn" onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: true}))})) : syncTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
               <button className="secondary-btn" onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: false}))})) : syncTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
               <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && syncTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', statusType: 'text', tillYest: '', today: '', totalTarget: '', origStartDate: '', origDays: '', origEndDate: '' }])}>Clear All</button>
@@ -1393,6 +1469,34 @@ const result = [];
                   </div>
                 ))
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCombinedModal && (
+        <div className="history-overlay" onClick={() => setShowCombinedModal(false)}>
+          <div className="history-modal combined-modal" onClick={e => e.stopPropagation()}>
+            <div className="history-modal-header">
+              <h2>Combined Report</h2>
+              <button className="history-close-btn" onClick={() => setShowCombinedModal(false)}>×</button>
+            </div>
+            <div className="history-modal-body combined-modal-body">
+              <label className="combined-option">
+                <input
+                  type="checkbox"
+                  checked={includeSupervisorReport}
+                  onChange={e => setIncludeSupervisorReport(e.target.checked)}
+                />
+                <span>
+                  <strong>Include supervisor report</strong>
+                  <small>Adds a page per supervisor with their tasks across projects, including parent &amp; child tasks for context.</small>
+                </span>
+              </label>
+            </div>
+            <div className="combined-modal-footer">
+              <button className="secondary-btn" onClick={() => setShowCombinedModal(false)}>Cancel</button>
+              <button className="secondary-btn combined-btn" onClick={() => handleCombinedReport(includeSupervisorReport)}>Generate Report</button>
             </div>
           </div>
         </div>
