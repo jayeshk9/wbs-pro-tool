@@ -770,6 +770,20 @@ const result = [];
     });
   };
 
+  // Stamps "Ajmer Estate" on the title line (same font/size as the report title),
+  // right-aligned, on every page. Call right before save.
+  const stampEstateHeader = (pdfDoc) => {
+    const pageWidth = pdfDoc.internal.pageSize.getWidth();
+    const total = pdfDoc.getNumberOfPages();
+    for (let i = 1; i <= total; i++) {
+      pdfDoc.setPage(i);
+      pdfDoc.setFontSize(16);
+      pdfDoc.setFont('helvetica', 'normal');
+      pdfDoc.setTextColor(0, 0, 0);
+      pdfDoc.text('Ajmer Estate', pageWidth - 14, 15, { align: 'right' });
+    }
+  };
+
   // Print current project
   const handlePrintPDF = () => {
     const effectiveTasksFull = viewingVersion ? viewingVersion.tasks : tasks;
@@ -788,7 +802,8 @@ const result = [];
       buildProjectTable(pdfDoc, filteredTasks, currentProjectName, effectiveReportDate, effectiveTasksFull, filterInfo);
       saveVersion(tasks, reportDate);
     }
-    pdfDoc.save(`WBS_${currentProjectName.replace(/\s+/g, '_')}_${effectiveReportDate}.pdf`);
+    stampEstateHeader(pdfDoc);
+    pdfDoc.save(`Project_AjmerEstate_${effectiveReportDate}.pdf`);
   };
 
   // Combined report: all projects, always excludes completed tasks (except completed today).
@@ -835,7 +850,9 @@ const result = [];
       }
     }
 
-    pdfDoc.save(`WBS_Combined_Report_${effectiveReportDate}.pdf`);
+    stampEstateHeader(pdfDoc);
+    const namePrefix = withSupervisorReport ? 'FullSupervisors' : 'Full';
+    pdfDoc.save(`${namePrefix}_AjmerEstate_${effectiveReportDate}.pdf`);
     saveVersion(tasks, reportDate);
   };
 
