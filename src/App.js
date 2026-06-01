@@ -457,6 +457,13 @@ function App() {
     return `${d}/${m}/${y.slice(-2)}`;
   };
 
+  // dd-mm-yy for use in PDF filenames (no slashes)
+  const formatDateFile = (dateStr) => {
+    if (!dateStr) return '';
+    const [y, m, d] = dateStr.split('-');
+    return `${d}-${m}-${y.slice(-2)}`;
+  };
+
   const displayTasks = viewingVersion ? viewingVersion.tasks : tasks;
   const displayReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
 
@@ -803,7 +810,7 @@ const result = [];
       saveVersion(tasks, reportDate);
     }
     stampEstateHeader(pdfDoc);
-    pdfDoc.save(`Project_AjmerEstate_${effectiveReportDate}.pdf`);
+    pdfDoc.save(`Project_AjmerEstate_${formatDateFile(effectiveReportDate)}.pdf`);
   };
 
   // Combined report: all projects, always excludes completed tasks (except completed today).
@@ -852,7 +859,7 @@ const result = [];
 
     stampEstateHeader(pdfDoc);
     const namePrefix = withSupervisorReport ? 'FullSupervisors' : 'Full';
-    pdfDoc.save(`${namePrefix}_AjmerEstate_${effectiveReportDate}.pdf`);
+    pdfDoc.save(`${namePrefix}_AjmerEstate_${formatDateFile(effectiveReportDate)}.pdf`);
     saveVersion(tasks, reportDate);
   };
 
