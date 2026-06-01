@@ -178,6 +178,33 @@ input[type="number"] {
 }
 .history-delete-btn:hover { opacity: 1; background: #fee2e2; }
 
+/* Combined report modal */
+.combined-modal { width: 420px; }
+.combined-modal-body { padding: 20px; }
+.combined-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.combined-option input[type="checkbox"] {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.combined-option span { display: flex; flex-direction: column; gap: 3px; }
+.combined-option strong { font-size: 14px; color: #111827; }
+.combined-option small { font-size: 12px; color: #6b7280; line-height: 1.4; }
+.combined-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+}
+
 /* Controls row — fused top of the wbs-table */
 /* Completed Tasks Section */
 .completed-section {
