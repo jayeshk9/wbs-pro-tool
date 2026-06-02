@@ -1128,6 +1128,39 @@ input[type="number"] {
 .react-datepicker__month-select:focus,
 .react-datepicker__year-select:focus { outline: none; border-color: #60a5fa; }
 
+/* ── Weather forecast in calendar days ────────────────────────────────── */
+/* Forecast days grow a little and stack: date number on top, icon + rain % below */
+.react-datepicker__day.dp-has-wx {
+  height: auto !important;
+  min-height: 42px !important;
+  line-height: 1 !important;
+  padding: 3px 0 2px !important;
+  vertical-align: top;
+}
+.dp-day-weather {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+.dp-day-num { font-size: 12px; font-weight: 500; line-height: 1; }
+.dp-day-wx {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  line-height: 1;
+}
+.dp-day-icon { font-size: 11px; }
+.dp-day-rain { font-size: 8px; font-weight: 700; color: #2563eb; }
+/* Subtle wet-day tint — holiday colors (defined later) still win on conflict */
+.react-datepicker__day.dp-day-wet:not(.react-datepicker__day--selected) {
+  background: #e0f2fe !important;
+}
+.react-datepicker__day--selected .dp-day-rain,
+.react-datepicker__day--keyboard-selected .dp-day-rain { color: #fff; }
+.dp-legend-wx { color: #2563eb; }
+
 /* ── Datepicker legend ───────────────────────────────────────────────── */
 .dp-legend {
   display: flex; flex-direction: row; align-items: center; gap: 14px;

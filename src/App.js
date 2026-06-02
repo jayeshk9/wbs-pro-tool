@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, useContext } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -38,6 +38,75 @@ const EID_DATES = new Set([
   '2024-06-17','2025-06-07','2026-05-28',
 ]);
 
+// ── Weather forecast (Open-Meteo — free, no API key required) ──────────────
+// Site: Ajmer Estate, Ajmer, Rajasthan. To pin the exact site, replace these
+// two numbers with the precise latitude/longitude — nothing else changes.
+const SITE_LAT = 26.4499;
+const SITE_LON = 74.6399;
+const WEATHER_CACHE_KEY = 'wbs-weather-cache-v1';
+const WEATHER_TTL_MS = 60 * 60 * 1000; // refetch at most once an hour
+
+// WMO weather codes → emoji + label (https://open-meteo.com/en/docs)
+const WEATHER_INFO = {
+  0:  { e: '☀️', label: 'Clear' },
+  1:  { e: '🌤️', label: 'Mainly clear' },
+  2:  { e: '⛅', label: 'Partly cloudy' },
+  3:  { e: '☁️', label: 'Overcast' },
+  45: { e: '🌫️', label: 'Fog' },     48: { e: '🌫️', label: 'Rime fog' },
+  51: { e: '🌦️', label: 'Light drizzle' }, 53: { e: '🌦️', label: 'Drizzle' }, 55: { e: '🌦️', label: 'Dense drizzle' },
+  56: { e: '🌧️', label: 'Freezing drizzle' }, 57: { e: '🌧️', label: 'Freezing drizzle' },
+  61: { e: '🌦️', label: 'Light rain' }, 63: { e: '🌧️', label: 'Rain' }, 65: { e: '🌧️', label: 'Heavy rain' },
+  66: { e: '🌧️', label: 'Freezing rain' }, 67: { e: '🌧️', label: 'Freezing rain' },
+  71: { e: '🌨️', label: 'Light snow' }, 73: { e: '🌨️', label: 'Snow' }, 75: { e: '❄️', label: 'Heavy snow' }, 77: { e: '❄️', label: 'Snow grains' },
+  80: { e: '🌦️', label: 'Light showers' }, 81: { e: '🌧️', label: 'Showers' }, 82: { e: '⛈️', label: 'Violent showers' },
+  85: { e: '🌨️', label: 'Snow showers' }, 86: { e: '❄️', label: 'Snow showers' },
+  95: { e: '⛈️', label: 'Thunderstorm' }, 96: { e: '⛈️', label: 'Thunderstorm w/ hail' }, 99: { e: '⛈️', label: 'Thunderstorm w/ hail' },
+};
+const weatherFor = (code) => WEATHER_INFO[code] || { e: '', label: '' };
+
+// Context carries a { 'YYYY-MM-DD': {code, tmax, tmin, precip} } map (or null) to every date picker
+const WeatherContext = React.createContext(null);
+
+const readWeatherCache = () => {
+  try { return JSON.parse(localStorage.getItem(WEATHER_CACHE_KEY)); } catch { return null; }
+};
+
+// Fetches the forecast once, caches it, and exposes the date→weather map
+function useWeatherForecast() {
+  const [byDate, setByDate] = useState(() => readWeatherCache()?.byDate || null);
+
+  useEffect(() => {
+    const cached = readWeatherCache();
+    if (cached?.fetchedAt && (Date.now() - cached.fetchedAt) < WEATHER_TTL_MS) return; // still fresh
+
+    let cancelled = false;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LAT}&longitude=${SITE_LON}`
+      + `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max`
+      + `&timezone=auto&forecast_days=16`;
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled || !data?.daily?.time) return;
+        const d = data.daily;
+        const map = {};
+        d.time.forEach((date, i) => {
+          map[date] = {
+            code: d.weather_code?.[i],
+            tmax: d.temperature_2m_max?.[i],
+            tmin: d.temperature_2m_min?.[i],
+            precip: d.precipitation_probability_max?.[i],
+          };
+        });
+        try { localStorage.setItem(WEATHER_CACHE_KEY, JSON.stringify({ fetchedAt: Date.now(), byDate: map })); } catch {}
+        setByDate(map);
+      })
+      .catch(() => { /* offline / API down — calendar just shows no weather */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  return byDate;
+}
+
 function CalendarWithLegend({ className, children }) {
   return (
     <div className={className} style={{ display: 'flex', flexDirection: 'column' }}>
@@ -45,12 +114,14 @@ function CalendarWithLegend({ className, children }) {
       <div className="dp-legend">
         <span><span className="dp-legend-dot dp-legend-amawas" />Amawas</span>
         <span><span className="dp-legend-dot dp-legend-eid" />Eid</span>
+        <span className="dp-legend-wx">🌧️ rain % forecast</span>
       </div>
     </div>
   );
 }
 
 function HolidayDatePicker({ value, onChange, className, readOnly, onKeyDown, placeholder }) {
+  const weather = useContext(WeatherContext);
   const selected = value ? new Date(value + 'T00:00:00') : null;
 
   const handleChange = (date) => {
@@ -60,9 +131,32 @@ function HolidayDatePicker({ value, onChange, className, readOnly, onKeyDown, pl
 
   const getDayClass = (date) => {
     const str = date.toLocaleDateString('sv');
-    if (AMAWAS_DATES.has(str)) return 'holiday-amawas';
-    if (EID_DATES.has(str)) return 'holiday-eid';
-    return undefined;
+    const classes = [];
+    if (AMAWAS_DATES.has(str)) classes.push('holiday-amawas');
+    else if (EID_DATES.has(str)) classes.push('holiday-eid');
+    const w = weather?.[str];
+    if (w) classes.push('dp-has-wx');
+    if (w?.precip != null && w.precip >= 50) classes.push('dp-day-wet');
+    return classes.length ? classes.join(' ') : undefined;
+  };
+
+  // Overlay each forecast day with a small weather icon + rain %; tooltip carries the detail
+  const renderDayContents = (dayOfMonth, date) => {
+    const w = weather?.[date.toLocaleDateString('sv')];
+    if (!w) return dayOfMonth;
+    const info = weatherFor(w.code);
+    const showRain = w.precip != null && w.precip >= 20;
+    const temps = (w.tmax != null && w.tmin != null) ? ` · ${Math.round(w.tmin)}–${Math.round(w.tmax)}°C` : '';
+    const rainTip = w.precip != null ? ` · rain ${w.precip}%` : '';
+    return (
+      <span className="dp-day-weather" title={`${info.label}${temps}${rainTip}`}>
+        <span className="dp-day-num">{dayOfMonth}</span>
+        <span className="dp-day-wx">
+          <span className="dp-day-icon">{info.e}</span>
+          {showRain && <span className="dp-day-rain">{w.precip}%</span>}
+        </span>
+      </span>
+    );
   };
 
   return (
@@ -71,6 +165,7 @@ function HolidayDatePicker({ value, onChange, className, readOnly, onKeyDown, pl
       onChange={handleChange}
       dateFormat="dd-MM-yyyy"
       dayClassName={getDayClass}
+      renderDayContents={renderDayContents}
       className={className}
       onKeyDown={onKeyDown}
       readOnly={readOnly}
@@ -136,6 +231,7 @@ function App() {
   };
 
   const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
+  const weatherForecast = useWeatherForecast();
   const [focusId, setFocusId] = useState(null);
   const [activeMenu, setActiveMenu] = useState(null);
   const [hoveredTaskId, setHoveredTaskId] = useState(null);
@@ -165,6 +261,10 @@ function App() {
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'projectsMeta'), (snap) => {
       if (snap.empty) {
+        // Only seed a default project when the SERVER confirms the collection is empty.
+        // Firestore fires cached/offline snapshots first; acting on those would overwrite
+        // real cloud data (this previously renamed projects to "Project 1" and wiped tasks).
+        if (snap.metadata.fromCache || snap.metadata.hasPendingWrites) return;
         setDoc(doc(db, 'projectsMeta', 'main-project'), {
           name: 'Project 1',
           createdAt: new Date().toISOString(),
@@ -213,6 +313,10 @@ function App() {
         }
         setTasks(loadedTasks);
       } else {
+        // Doc missing: only seed a default task when the SERVER confirms it's absent.
+        // A cached/offline snapshot can momentarily report a real project as missing;
+        // overwriting on that would wipe its tasks (root cause of the "Common" data loss).
+        if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
         const defaultTask = [{
           id: `initial-${Date.now()}`, text: 'Project Start', level: 0, isCollapsed: false,
           assignedTo: [], status: '-', statusType: 'text',
@@ -1001,6 +1105,7 @@ const result = [];
   }, [tasks]);
 
   return (
+    <WeatherContext.Provider value={weatherForecast}>
     <div className="App">
       <header className="header">
         <div className="header-top">
@@ -1576,6 +1681,7 @@ const result = [];
         );
       })()}
     </div>
+    </WeatherContext.Provider>
   );
 }
 
