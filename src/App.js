@@ -740,6 +740,10 @@ const result = [];
 
     return {
       startY,
+      // Reserve space at the top of every page for the "Ajmer Estate" header stamp (drawn at y=15).
+      // Without this, tables that overflow onto a continuation page resume at autoTable's default
+      // top margin (~14mm) and collide with the stamp.
+      margin: { top: 20 },
       head: [['WBS', 'TASK DESCRIPTION', 'SUPERVISOR', 'STATUS', 'START', 'DAYS', 'END DATE', 'REMARKS']],
       body: tableData,
       theme: 'grid',
