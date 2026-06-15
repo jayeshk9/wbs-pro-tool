@@ -716,10 +716,25 @@ const result = [];
   // PDF EXPORT
   // Shared autoTable config builder so project tables and supervisor tables render identically
   const buildTaskTableOptions = (pdfDoc, effectiveTasks, effectiveReportDate, wbsSource, startY) => {
+    // Mirror the dashboard's WBS numbering exactly: number against the project's tasks
+    // with old completed tasks excluded (status !== 'completed' || completedAt === TODAY),
+    // mapped by task id. Numbering against the full source (incl. old completed tasks)
+    // is what made e.g. an active task show 2.2 in the report while the dashboard shows 2.1.
+    const wbsArr = (wbsSource || effectiveTasks).filter(t => t.status !== 'completed' || t.completedAt === TODAY);
+    const wbsIdxById = new Map(wbsArr.map((t, i) => [t.id, i]));
+
     const tableData = effectiveTasks.map((task, index) => {
-      const wbsNum = (wbsSource && task.originalIndex != null)
-        ? generateWBSString(task.originalIndex, wbsSource)
-        : generateWBSString(index, effectiveTasks);
+      let wbsNum;
+      if (task.id != null && wbsIdxById.has(task.id)) {
+        wbsNum = generateWBSString(wbsIdxById.get(task.id), wbsArr);
+      } else if (wbsSource && task.originalIndex != null) {
+        wbsNum = generateWBSString(task.originalIndex, wbsSource);
+      } else {
+        wbsNum = generateWBSString(index, effectiveTasks);
+      }
+      // Show the stable task id under the WBS number, matching the dashboard (#taskSeq).
+      const seqId = task.taskSeq != null ? task.taskSeq : (task.originalIndex != null ? task.originalIndex + 1 : index + 1);
+      const wbsCell = `${wbsNum}\n#${seqId}`;
       const indent = "        ".repeat(task.level);
       let statusText = '';
       if (task.statusType !== 'fraction') {
@@ -735,7 +750,7 @@ const result = [];
       if (task.origDays && String(task.origDays) !== String(task.days)) daysStr += `\n${task.origDays}`;
       let endStr = formatDateShort(task.endDate); if (endStr === '-') endStr = '';
       if (task.origEndDate && task.origEndDate !== task.endDate) endStr += `\n${formatDateShort(task.origEndDate)}`;
-      return [wbsNum, indent + task.text, task.assignedTo.join(', ') || '', statusText, startStr, daysStr, endStr, task.remarks || ''];
+      return [wbsCell, indent + task.text, task.assignedTo.join(', ') || '', statusText, startStr, daysStr, endStr, task.remarks || ''];
     });
 
     return {
@@ -780,6 +795,8 @@ const result = [];
         if (data.section === 'body') {
           const task = effectiveTasks[data.row.index];
           const c = data.column.index;
+          // WBS cell is custom-drawn in didDrawCell (WBS big, task id tiny) — clear default text.
+          if (c === 0) { data.cell.text = ['']; return; }
           let hasDiff = false;
           if (c === 4 && task.origStartDate && task.origStartDate !== task.startDate) hasDiff = true;
           if (c === 5 && task.origDays && String(task.origDays) !== String(task.days)) hasDiff = true;
@@ -791,6 +808,26 @@ const result = [];
         if (data.section === 'body') {
           const task = effectiveTasks[data.row.index];
           const c = data.column.index;
+          if (c === 0) {
+            // WBS number at the cell's normal size; task id rendered tiny and muted beneath it.
+            let wbsNum;
+            if (task.id != null && wbsIdxById.has(task.id)) wbsNum = generateWBSString(wbsIdxById.get(task.id), wbsArr);
+            else if (wbsSource && task.originalIndex != null) wbsNum = generateWBSString(task.originalIndex, wbsSource);
+            else wbsNum = generateWBSString(data.row.index, effectiveTasks);
+            const seqId = task.taskSeq != null ? task.taskSeq : (task.originalIndex != null ? task.originalIndex + 1 : data.row.index + 1);
+            const cx = data.cell.x + data.cell.width / 2;
+            const midY = data.cell.y + data.cell.height / 2;
+            const baseFont = data.cell.styles.fontSize || 7;
+            pdfDoc.setFont('helvetica', data.cell.styles.fontStyle === 'bold' ? 'bold' : 'normal');
+            pdfDoc.setFontSize(baseFont);
+            pdfDoc.setTextColor(0, 0, 0);
+            pdfDoc.text(wbsNum, cx, midY - 1.3, { align: 'center', baseline: 'middle' });
+            pdfDoc.setFont('helvetica', 'normal');
+            pdfDoc.setFontSize(4.2);
+            pdfDoc.setTextColor(135, 135, 135);
+            pdfDoc.text(`#${seqId}`, cx, midY + 2.6, { align: 'center', baseline: 'middle' });
+            return;
+          }
           if (c === 3 && task.statusType === 'fraction') {
             const yest = parseFloat(task.tillYest) || 0, tod = parseFloat(task.today) || 0;
             const tot = parseFloat(task.totalTarget) || 0, wd = parseFloat(task.days) || 0;
@@ -935,58 +972,76 @@ const result = [];
   // Combined report: all projects, always excludes completed tasks (except completed today).
   // When withSupervisorReport is true, appends a per-supervisor page showing each
   // supervisor's tasks (project-wise, with parent/child context) across all projects.
+  // Tasks read straight from Firestore for OTHER projects may predate current fields or
+  // carry malformed values (e.g. assignedTo missing, a non-numeric/negative level). The
+  // report relies on task.assignedTo.join(...) and "  ".repeat(task.level), either of which
+  // throws on a bad record — and a single throw aborts the whole async report with no
+  // download and no error (why "Combined Report" appeared to do nothing). Coerce the fields
+  // the report touches so one legacy task can't kill the export.
+  const normalizeTaskForReport = (t) => ({
+    ...t,
+    assignedTo: Array.isArray(t.assignedTo) ? t.assignedTo : [],
+    level: Math.max(0, Math.floor(Number(t.level) || 0)),
+  });
+
   const handleCombinedReport = async (withSupervisorReport = true) => {
     setShowCombinedModal(false);
-    const effectiveReportDate = reportDate;
-    const pdfDoc = new jsPDF('l', 'mm', 'a4');
+    try {
+      const effectiveReportDate = reportDate;
+      const pdfDoc = new jsPDF('l', 'mm', 'a4');
 
-    // Fetch every project's tasks once so the main report and supervisor reports share data
-    const projectData = [];
-    for (const p of projects) {
-      let projectTasks;
-      if (p.id === activeProjectId) {
-        projectTasks = tasks;
-      } else {
-        const snap = await getDoc(doc(db, 'projects', p.id));
-        projectTasks = snap.exists() ? snap.data().tasks || [] : [];
-      }
-      projectData.push({ project: p, tasks: projectTasks });
-    }
-
-    // Main combined report — one page per project
-    projectData.forEach(({ project, tasks: projectTasks }, i) => {
-      if (i > 0) pdfDoc.addPage();
-      const filteredForReport = projectTasks
-        .map((t, idx) => ({ ...t, originalIndex: idx }))
-        .filter(t => t.status !== 'completed' || t.completedAt === TODAY);
-      buildProjectTable(pdfDoc, filteredForReport, project.name, effectiveReportDate, projectTasks, null, project.assignedTo || []);
-    });
-
-    // Per-supervisor reports
-    if (withSupervisorReport) {
-      for (const supervisorName of ASSIGNED_OPTIONS) {
-        const sections = [];
-        for (const { project, tasks: projectTasks } of projectData) {
-          // A project lead is treated as assigned to the whole project, so show every active task;
-          // otherwise just their own tasks plus parent/child context.
-          const leadsProject = (project.assignedTo || []).includes(supervisorName);
-          const subset = leadsProject
-            ? projectTasks
-                .map((t, idx) => ({ ...t, originalIndex: idx }))
-                .filter(t => t.status !== 'completed' || t.completedAt === TODAY)
-            : buildSupervisorSubset(projectTasks, supervisorName);
-          if (subset.length > 0) sections.push({ projectName: project.name, subset, wbsSource: projectTasks });
+      // Fetch every project's tasks once so the main report and supervisor reports share data
+      const projectData = [];
+      for (const p of projects) {
+        let projectTasks;
+        if (p.id === activeProjectId) {
+          projectTasks = tasks;
+        } else {
+          const snap = await getDoc(doc(db, 'projects', p.id));
+          projectTasks = snap.exists() ? snap.data().tasks || [] : [];
         }
-        if (sections.length === 0) continue;
-        pdfDoc.addPage();
-        buildSupervisorReport(pdfDoc, supervisorName, sections, effectiveReportDate);
+        projectData.push({ project: p, tasks: (projectTasks || []).map(normalizeTaskForReport) });
       }
-    }
 
-    stampEstateHeader(pdfDoc);
-    const namePrefix = withSupervisorReport ? 'FullSupervisors' : 'Full';
-    pdfDoc.save(`${namePrefix}_AjmerEstate_${formatDateFile(effectiveReportDate)}.pdf`);
-    saveVersion(tasks, reportDate);
+      // Main combined report — one page per project
+      projectData.forEach(({ project, tasks: projectTasks }, i) => {
+        if (i > 0) pdfDoc.addPage();
+        const filteredForReport = projectTasks
+          .map((t, idx) => ({ ...t, originalIndex: idx }))
+          .filter(t => t.status !== 'completed' || t.completedAt === TODAY);
+        buildProjectTable(pdfDoc, filteredForReport, project.name, effectiveReportDate, projectTasks, null, project.assignedTo || []);
+      });
+
+      // Per-supervisor reports
+      if (withSupervisorReport) {
+        for (const supervisorName of ASSIGNED_OPTIONS) {
+          const sections = [];
+          for (const { project, tasks: projectTasks } of projectData) {
+            // A project lead is treated as assigned to the whole project, so show every active task;
+            // otherwise just their own tasks plus parent/child context.
+            const leadsProject = (project.assignedTo || []).includes(supervisorName);
+            const subset = leadsProject
+              ? projectTasks
+                  .map((t, idx) => ({ ...t, originalIndex: idx }))
+                  .filter(t => t.status !== 'completed' || t.completedAt === TODAY)
+              : buildSupervisorSubset(projectTasks, supervisorName);
+            if (subset.length > 0) sections.push({ projectName: project.name, subset, wbsSource: projectTasks });
+          }
+          if (sections.length === 0) continue;
+          pdfDoc.addPage();
+          buildSupervisorReport(pdfDoc, supervisorName, sections, effectiveReportDate);
+        }
+      }
+
+      stampEstateHeader(pdfDoc);
+      const namePrefix = withSupervisorReport ? 'FullSupervisors' : 'Full';
+      pdfDoc.save(`${namePrefix}_AjmerEstate_${formatDateFile(effectiveReportDate)}.pdf`);
+      saveVersion(tasks, reportDate);
+    } catch (err) {
+      // Never fail silently — surface it so the report is debuggable instead of just "not working".
+      console.error('Combined report failed:', err);
+      alert(`Could not generate the combined report.\n\n${err?.message || err}`);
+    }
   };
 
   const updateDates = (task, field, value) => {
