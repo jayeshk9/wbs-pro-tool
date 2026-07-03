@@ -219,7 +219,14 @@ input[type="number"] {
   border: 1px solid var(--border);
   border-radius: 6px;
 }
-.completed-on-date { font-size: 12px; color: var(--green-text); font-weight: 500; }
+/* Completed-on cell: completion date (left) | schedule deviations (right), mirroring the PDF report */
+.completed-on-split { display: flex; align-items: stretch; justify-content: center; gap: 0; width: 100%; }
+.completed-on-date { display: flex; align-items: center; font-size: 12px; color: #334155; font-weight: 500; }
+.completed-on-devs { display: flex; flex-direction: column; justify-content: center; margin-left: 8px; padding-left: 8px; border-left: 1px solid #d0d0d0; }
+.dev-badge { font-size: 10px; font-weight: 500; line-height: 1.4; white-space: nowrap; }
+.dev-badge + .dev-badge { border-top: 1px solid #ececec; }
+.dev-late { color: #be3232; }
+.dev-ok { color: #1e784b; }
 .combined-modal-footer {
   display: flex;
   justify-content: flex-end;

@@ -1828,6 +1828,9 @@ const result = [];
                   }
 
                   const showBlueAccent = task.level === 0 || (hasChildren && task.isCollapsed);
+                  // Schedule deviation (days between completion and planned end) — same as the PDF report.
+                  const cDevExp = task.endDate ? dayDiff(task.completedAt, task.endDate) : null;
+                  const cDevOrig = (task.origEndDate && task.origEndDate !== task.endDate) ? dayDiff(task.completedAt, task.origEndDate) : null;
                   return (
                     <div key={`completed-${task.id}`} className={`wbs-row level-${task.level} ${showBlueAccent ? 'blue-accent' : ''} completed-task-row`}>
                       <div className="col drag-handle drag-disabled" style={{ opacity: 0 }}>⠿</div>
@@ -1846,7 +1849,17 @@ const result = [];
                         </div>
                       </div>
                       <div className="col assigned-col completed-data-cell"><span className="completed-cell-text">{task.assignedTo?.join(', ') || '-'}</span></div>
-                      <div className="col status-col completed-status-cell"><span className="completed-on-date">{formatDateShort(task.completedAt)}</span></div>
+                      <div className="col status-col completed-status-cell">
+                        <div className="completed-on-split">
+                          <span className="completed-on-date">{formatDateShort(task.completedAt)}</span>
+                          {(cDevExp !== null || cDevOrig !== null) && (
+                            <span className="completed-on-devs">
+                              {cDevExp !== null && <span className={`dev-badge ${cDevExp > 0 ? 'dev-late' : 'dev-ok'}`}>Exp: {cDevExp > 0 ? '+' : ''}{cDevExp}d</span>}
+                              {cDevOrig !== null && <span className={`dev-badge ${cDevOrig > 0 ? 'dev-late' : 'dev-ok'}`}>Orig: {cDevOrig > 0 ? '+' : ''}{cDevOrig}d</span>}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                       <div className="col date-col completed-data-cell"><span className="completed-cell-text">{task.startDate || '-'}</span></div>
                       <div className="col day-col completed-data-cell"><span className="completed-cell-text">{task.days || '-'}</span></div>
                       <div className="col date-col completed-data-cell"><span className="completed-cell-text">{task.endDate || '-'}</span></div>
