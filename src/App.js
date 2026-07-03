@@ -737,7 +737,12 @@ const result = [];
 
     const tableData = effectiveTasks.map((task, index) => {
       let wbsNum;
-      if (task.id != null && wbsIdxById.has(task.id)) {
+      // In completedMode, number against the full source by originalIndex — this matches the
+      // dashboard's Completed Tasks section (which includes old completed tasks in its numbering),
+      // and keeps ghost ancestors numbered consistently with the completed rows beneath them.
+      if (completedMode && wbsSource && task.originalIndex != null) {
+        wbsNum = generateWBSString(task.originalIndex, wbsSource);
+      } else if (task.id != null && wbsIdxById.has(task.id)) {
         wbsNum = generateWBSString(wbsIdxById.get(task.id), wbsArr);
       } else if (wbsSource && task.originalIndex != null) {
         wbsNum = generateWBSString(task.originalIndex, wbsSource);
@@ -762,6 +767,10 @@ const result = [];
       if (task.origDays && String(task.origDays) !== String(task.days)) daysStr += `\n${task.origDays}`;
       let endStr = formatDateShort(task.endDate); if (endStr === '-') endStr = '';
       if (task.origEndDate && task.origEndDate !== task.endDate) endStr += `\n${formatDateShort(task.origEndDate)}`;
+      // Ghost ancestor rows carry only WBS + name for context — no data cells.
+      if (completedMode && task.isGhost) {
+        return [wbsCell, indent + (task.text || 'Unnamed'), '', '', '', '', '', ''];
+      }
       const col3 = completedMode ? formatDateShort(task.completedAt) : statusText;
       return [wbsCell, indent + task.text, task.assignedTo.join(', ') || '', col3, startStr, daysStr, endStr, task.remarks || ''];
     });
@@ -775,6 +784,9 @@ const result = [];
       head: [['WBS', 'TASK DESCRIPTION', 'SUPERVISOR', completedMode ? 'COMPLETED ON' : 'STATUS', 'START', 'DAYS', 'END DATE', 'REMARKS']],
       body: tableData,
       theme: 'grid',
+      // On the completed page (many multi-line rows) keep each row whole — move it to the next
+      // page rather than splitting it across the boundary, which would orphan its second lines.
+      rowPageBreak: completedMode ? 'avoid' : 'auto',
       headStyles: { fillColor: [0, 0, 0], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
       styles: { fontSize: 7, cellPadding: 2, valign: 'middle', textColor: [0, 0, 0] },
       columnStyles: {
@@ -785,6 +797,8 @@ const result = [];
       didParseCell: (data) => {
         const task = effectiveTasks[data.row.index];
         if (data.section === 'body') {
+          if (!task) return;
+          const isGhostRow = completedMode && task.isGhost;
           if (task.level === 0) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = [215, 215, 215]; }
           else if (task.level === 1) data.cell.styles.fillColor = [255, 255, 255];
           else if (task.level === 2) data.cell.styles.fillColor = [248, 248, 248];
@@ -794,7 +808,7 @@ const result = [];
           const isEndHighlight = task.endDate === effectiveReportDate;
           const isDateCol = (data.column.index === 4 && isStartHighlight) || (data.column.index === 6 && isEndHighlight);
           const isStuck = data.column.index === 3 && task.statusType !== 'fraction' && task.status === 'stuck';
-          if (isStuck || isDateCol) {
+          if (!isGhostRow && (isStuck || isDateCol)) {
             data.cell.styles.fillColor = [50, 50, 50];
             data.cell.styles.textColor = [255, 255, 255];
             data.cell.styles.fontStyle = 'bold';
@@ -802,14 +816,20 @@ const result = [];
             if (task.status === 'completed') { data.cell.styles.fontStyle = 'italic'; data.cell.styles.textColor = [0, 0, 0]; }
             else if (task.status === 'in progress') data.cell.styles.fontStyle = 'bold';
           }
+          // Ghost ancestors: muted italic so they read as WBS context, not completed work.
+          if (isGhostRow) { data.cell.styles.textColor = [120, 120, 120]; data.cell.styles.fontStyle = 'italic'; }
         }
       },
       willDrawCell: (data) => {
         if (data.section === 'body') {
           const task = effectiveTasks[data.row.index];
+          if (!task) return;
           const c = data.column.index;
           // WBS cell is custom-drawn in didDrawCell (WBS big, task id tiny) — clear default text.
           if (c === 0) { data.cell.text = ['']; return; }
+          // Ghost ancestors have no data cells — leave them blank (don't run diff/fraction logic
+          // against the ancestor's own dates, which would otherwise re-draw values in didDrawCell).
+          if (completedMode && task.isGhost) return;
           let hasDiff = false;
           if (c === 4 && task.origStartDate && task.origStartDate !== task.startDate) hasDiff = true;
           if (c === 5 && task.origDays && String(task.origDays) !== String(task.days)) hasDiff = true;
@@ -820,20 +840,25 @@ const result = [];
       didDrawCell: (data) => {
         if (data.section === 'body') {
           const task = effectiveTasks[data.row.index];
+          // A row split across a page boundary is re-invoked with a synthesized row whose index
+          // is -1 (spansMultiplePages) — no backing task. Skip the custom overlay for it.
+          if (!task) return;
           const c = data.column.index;
           if (c === 0) {
             // WBS number at the cell's normal size; task id rendered tiny and muted beneath it.
             let wbsNum;
-            if (task.id != null && wbsIdxById.has(task.id)) wbsNum = generateWBSString(wbsIdxById.get(task.id), wbsArr);
+            if (completedMode && wbsSource && task.originalIndex != null) wbsNum = generateWBSString(task.originalIndex, wbsSource);
+            else if (task.id != null && wbsIdxById.has(task.id)) wbsNum = generateWBSString(wbsIdxById.get(task.id), wbsArr);
             else if (wbsSource && task.originalIndex != null) wbsNum = generateWBSString(task.originalIndex, wbsSource);
             else wbsNum = generateWBSString(data.row.index, effectiveTasks);
             const seqId = task.taskSeq != null ? task.taskSeq : (task.originalIndex != null ? task.originalIndex + 1 : data.row.index + 1);
             const cx = data.cell.x + data.cell.width / 2;
             const midY = data.cell.y + data.cell.height / 2;
             const baseFont = data.cell.styles.fontSize || 7;
-            pdfDoc.setFont('helvetica', data.cell.styles.fontStyle === 'bold' ? 'bold' : 'normal');
+            const ghostRow = completedMode && task.isGhost;
+            pdfDoc.setFont('helvetica', (!ghostRow && data.cell.styles.fontStyle === 'bold') ? 'bold' : 'normal');
             pdfDoc.setFontSize(baseFont);
-            pdfDoc.setTextColor(0, 0, 0);
+            pdfDoc.setTextColor(...(ghostRow ? [120, 120, 120] : [0, 0, 0]));
             pdfDoc.text(wbsNum, cx, midY - 1.3, { align: 'center', baseline: 'middle' });
             pdfDoc.setFont('helvetica', 'normal');
             pdfDoc.setFontSize(4.2);
@@ -841,6 +866,8 @@ const result = [];
             pdfDoc.text(`#${seqId}`, cx, midY + 2.6, { align: 'center', baseline: 'middle' });
             return;
           }
+          // Ghost ancestors: nothing else to draw (data cells are intentionally blank).
+          if (completedMode && task.isGhost) return;
           if (c === 3 && task.statusType === 'fraction') {
             const yest = parseFloat(task.tillYest) || 0, tod = parseFloat(task.today) || 0;
             const tot = parseFloat(task.totalTarget) || 0, wd = parseFloat(task.days) || 0;
@@ -945,18 +972,50 @@ const result = [];
     });
   };
 
+  // Injects ghost ancestor rows (parents of completed tasks that aren't themselves in the
+  // window) so each completed task shows the WBS context it belongs to — mirrors the dashboard's
+  // Completed Tasks section (completedDisplayList). Order is originalIndex (WBS) order, not date
+  // order, so siblings sit under their shared parent.
+  const buildCompletedDisplayRows = (completedTasks, allTasks) => {
+    const result = [];
+    const seenIds = new Set();
+    const completedIds = new Set(completedTasks.map(t => t.id));
+    for (const task of completedTasks) {
+      if (seenIds.has(task.id)) continue;
+      const ancestors = [];
+      let targetLvl = task.level - 1;
+      for (let i = task.originalIndex - 1; i >= 0 && targetLvl >= 0; i--) {
+        if (allTasks[i].level === targetLvl) {
+          if (!seenIds.has(allTasks[i].id)) {
+            ancestors.unshift({ ...allTasks[i], originalIndex: i, isGhost: !completedIds.has(allTasks[i].id) });
+          }
+          targetLvl--;
+        }
+      }
+      for (const anc of ancestors) { seenIds.add(anc.id); result.push(anc); }
+      seenIds.add(task.id);
+      result.push(task);
+    }
+    return result;
+  };
+
   // For each project, the tasks completed within [windowStart, windowEnd] (inclusive, by
-  // completedAt). originalIndex is kept so the report's WBS numbering matches the dashboard.
+  // completedAt), plus ghost ancestor rows for WBS context. `completed` drives the tally counts;
+  // `rows` (completed + ghosts, WBS order) is what the table renders. originalIndex is kept so
+  // the report's WBS numbering matches the dashboard.
   const gatherCompletedSections = (projectData, windowStart, windowEnd) =>
     projectData
-      .map(({ project, tasks: projectTasks }) => ({
-        projectName: project.name,
-        wbsSource: projectTasks,
-        completed: projectTasks
+      .map(({ project, tasks: projectTasks }) => {
+        const completed = projectTasks
           .map((t, idx) => ({ ...t, originalIndex: idx }))
-          .filter(t => t.status === 'completed' && t.completedAt && t.completedAt >= windowStart && t.completedAt <= windowEnd)
-          .sort((a, b) => a.completedAt.localeCompare(b.completedAt) || a.originalIndex - b.originalIndex),
-      }))
+          .filter(t => t.status === 'completed' && t.completedAt && t.completedAt >= windowStart && t.completedAt <= windowEnd);
+        return {
+          projectName: project.name,
+          wbsSource: projectTasks,
+          completed,
+          rows: buildCompletedDisplayRows(completed, projectTasks),
+        };
+      })
       .filter(section => section.completed.length > 0);
 
   // Renders the completed-tasks page: a title, a per-project tally, then one heading + table
@@ -988,7 +1047,7 @@ const result = [];
       pdfDoc.setFont('helvetica', 'bold');
       pdfDoc.text(section.projectName, 14, cursorY);
       pdfDoc.setFont('helvetica', 'normal');
-      autoTable(pdfDoc, buildTaskTableOptions(pdfDoc, section.completed, effectiveReportDate, section.wbsSource, cursorY + 3, true));
+      autoTable(pdfDoc, buildTaskTableOptions(pdfDoc, section.rows, effectiveReportDate, section.wbsSource, cursorY + 3, true));
       cursorY = pdfDoc.lastAutoTable.finalY + 12;
     });
   };
