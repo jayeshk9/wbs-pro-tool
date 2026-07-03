@@ -239,6 +239,9 @@ function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [showCombinedModal, setShowCombinedModal] = useState(false);
   const [includeSupervisorReport, setIncludeSupervisorReport] = useState(true);
+  const [includeCompletedReport, setIncludeCompletedReport] = useState(false);
+  const [completedRangeMode, setCompletedRangeMode] = useState('7'); // '7' | '30' | 'custom'
+  const [completedCustomRange, setCompletedCustomRange] = useState({ start: '', end: '' });
   const [projectSupModalId, setProjectSupModalId] = useState(null);
   const [historyVersions, setHistoryVersions] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -577,6 +580,15 @@ function App() {
     return `${d}-${m}-${y.slice(-2)}`;
   };
 
+  // Shift a YYYY-MM-DD string by n days (local, no timezone drift) → YYYY-MM-DD
+  const shiftIsoDate = (dateStr, deltaDays) => {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dt = new Date(y, m - 1, d + deltaDays);
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getDate()).padStart(2, '0');
+    return `${dt.getFullYear()}-${mm}-${dd}`;
+  };
+
   const displayTasks = viewingVersion ? viewingVersion.tasks : tasks;
   const displayReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
 
@@ -715,7 +727,7 @@ const result = [];
 
   // PDF EXPORT
   // Shared autoTable config builder so project tables and supervisor tables render identically
-  const buildTaskTableOptions = (pdfDoc, effectiveTasks, effectiveReportDate, wbsSource, startY) => {
+  const buildTaskTableOptions = (pdfDoc, effectiveTasks, effectiveReportDate, wbsSource, startY, completedMode = false) => {
     // Mirror the dashboard's WBS numbering exactly: number against the project's tasks
     // with old completed tasks excluded (status !== 'completed' || completedAt === TODAY),
     // mapped by task id. Numbering against the full source (incl. old completed tasks)
@@ -750,7 +762,8 @@ const result = [];
       if (task.origDays && String(task.origDays) !== String(task.days)) daysStr += `\n${task.origDays}`;
       let endStr = formatDateShort(task.endDate); if (endStr === '-') endStr = '';
       if (task.origEndDate && task.origEndDate !== task.endDate) endStr += `\n${formatDateShort(task.origEndDate)}`;
-      return [wbsCell, indent + task.text, task.assignedTo.join(', ') || '', statusText, startStr, daysStr, endStr, task.remarks || ''];
+      const col3 = completedMode ? formatDateShort(task.completedAt) : statusText;
+      return [wbsCell, indent + task.text, task.assignedTo.join(', ') || '', col3, startStr, daysStr, endStr, task.remarks || ''];
     });
 
     return {
@@ -759,7 +772,7 @@ const result = [];
       // Without this, tables that overflow onto a continuation page resume at autoTable's default
       // top margin (~14mm) and collide with the stamp.
       margin: { top: 20 },
-      head: [['WBS', 'TASK DESCRIPTION', 'SUPERVISOR', 'STATUS', 'START', 'DAYS', 'END DATE', 'REMARKS']],
+      head: [['WBS', 'TASK DESCRIPTION', 'SUPERVISOR', completedMode ? 'COMPLETED ON' : 'STATUS', 'START', 'DAYS', 'END DATE', 'REMARKS']],
       body: tableData,
       theme: 'grid',
       headStyles: { fillColor: [0, 0, 0], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
@@ -785,7 +798,7 @@ const result = [];
             data.cell.styles.fillColor = [50, 50, 50];
             data.cell.styles.textColor = [255, 255, 255];
             data.cell.styles.fontStyle = 'bold';
-          } else if (data.column.index === 3 && task.statusType !== 'fraction') {
+          } else if (!completedMode && data.column.index === 3 && task.statusType !== 'fraction') {
             if (task.status === 'completed') { data.cell.styles.fontStyle = 'italic'; data.cell.styles.textColor = [0, 0, 0]; }
             else if (task.status === 'in progress') data.cell.styles.fontStyle = 'bold';
           }
@@ -932,6 +945,54 @@ const result = [];
     });
   };
 
+  // For each project, the tasks completed within [windowStart, windowEnd] (inclusive, by
+  // completedAt). originalIndex is kept so the report's WBS numbering matches the dashboard.
+  const gatherCompletedSections = (projectData, windowStart, windowEnd) =>
+    projectData
+      .map(({ project, tasks: projectTasks }) => ({
+        projectName: project.name,
+        wbsSource: projectTasks,
+        completed: projectTasks
+          .map((t, idx) => ({ ...t, originalIndex: idx }))
+          .filter(t => t.status === 'completed' && t.completedAt && t.completedAt >= windowStart && t.completedAt <= windowEnd)
+          .sort((a, b) => a.completedAt.localeCompare(b.completedAt) || a.originalIndex - b.originalIndex),
+      }))
+      .filter(section => section.completed.length > 0);
+
+  // Renders the completed-tasks page: a title, a per-project tally, then one heading + table
+  // per project flowing continuously (fewest pages). The STATUS column shows the completion date.
+  const buildCompletedReport = (pdfDoc, sections, windowStart, windowEnd, effectiveReportDate, rangeLabel) => {
+    const pageWidth = pdfDoc.internal.pageSize.getWidth();
+    const pageHeight = pdfDoc.internal.pageSize.getHeight();
+    const total = sections.reduce((sum, s) => sum + s.completed.length, 0);
+    pdfDoc.setFontSize(16);
+    pdfDoc.setFont('helvetica', 'normal');
+    pdfDoc.text(`Completed Tasks — ${rangeLabel}`, 14, 15);
+    pdfDoc.setFontSize(10);
+    pdfDoc.text(`${formatDateShort(windowStart)} – ${formatDateShort(windowEnd)}  ·  all projects`, 14, 22);
+
+    let cursorY = 30;
+    pdfDoc.setFontSize(11);
+    pdfDoc.setFont('helvetica', 'bold');
+    pdfDoc.text(`Total completed: ${total}`, 14, cursorY);
+    pdfDoc.setFont('helvetica', 'normal');
+    pdfDoc.setFontSize(9);
+    const tally = sections.map(s => `${s.projectName}: ${s.completed.length}`).join('        ');
+    const tallyLines = pdfDoc.splitTextToSize(tally, pageWidth - 28);
+    pdfDoc.text(tallyLines, 14, cursorY + 6);
+    cursorY += 6 + tallyLines.length * 5 + 4;
+
+    sections.forEach((section) => {
+      if (cursorY > pageHeight - 40) { pdfDoc.addPage(); cursorY = 20; }
+      pdfDoc.setFontSize(12);
+      pdfDoc.setFont('helvetica', 'bold');
+      pdfDoc.text(section.projectName, 14, cursorY);
+      pdfDoc.setFont('helvetica', 'normal');
+      autoTable(pdfDoc, buildTaskTableOptions(pdfDoc, section.completed, effectiveReportDate, section.wbsSource, cursorY + 3, true));
+      cursorY = pdfDoc.lastAutoTable.finalY + 12;
+    });
+  };
+
   // Stamps "Ajmer Estate" on the title line (same font/size as the report title),
   // right-aligned, on every page. Call right before save.
   const stampEstateHeader = (pdfDoc) => {
@@ -984,7 +1045,19 @@ const result = [];
     level: Math.max(0, Math.floor(Number(t.level) || 0)),
   });
 
-  const handleCombinedReport = async (withSupervisorReport = true) => {
+  // Derives the completed-tasks window from the modal state. Returns null when the option is off.
+  const buildCompletedOpts = () => {
+    if (!includeCompletedReport) return null;
+    if (completedRangeMode === 'custom') {
+      const start = completedCustomRange.start || shiftIsoDate(reportDate, -6);
+      const end = completedCustomRange.end || reportDate;
+      return { start, end, label: 'custom range' };
+    }
+    const days = completedRangeMode === '30' ? 30 : 7;
+    return { start: shiftIsoDate(reportDate, -(days - 1)), end: reportDate, label: `last ${days} days` };
+  };
+
+  const handleCombinedReport = async (withSupervisorReport = true, completedOpts = null) => {
     setShowCombinedModal(false);
     try {
       const effectiveReportDate = reportDate;
@@ -1033,8 +1106,19 @@ const result = [];
         }
       }
 
+      // Completed-tasks page(s) — only added when there's actually completed work in the window,
+      // so an empty selection never leaves a blank page.
+      if (completedOpts) {
+        const completedSections = gatherCompletedSections(projectData, completedOpts.start, completedOpts.end);
+        if (completedSections.length > 0) {
+          pdfDoc.addPage();
+          buildCompletedReport(pdfDoc, completedSections, completedOpts.start, completedOpts.end, effectiveReportDate, completedOpts.label);
+        }
+      }
+
       stampEstateHeader(pdfDoc);
-      const namePrefix = withSupervisorReport ? 'FullSupervisors' : 'Full';
+      let namePrefix = withSupervisorReport ? 'FullSupervisors' : 'Full';
+      if (completedOpts) namePrefix += 'Completed';
       pdfDoc.save(`${namePrefix}_AjmerEstate_${formatDateFile(effectiveReportDate)}.pdf`);
       saveVersion(tasks, reportDate);
     } catch (err) {
@@ -1581,7 +1665,7 @@ const result = [];
                   <div className="col num-col">WBS</div>
                   <div className="col task-col">TASK DESCRIPTION</div>
                   <div className="col assigned-col">SUPERVISOR</div>
-                  <div className="col status-col">STATUS</div>
+                  <div className="col status-col">COMPLETED ON</div>
                   <div className="col date-col">START</div>
                   <div className="col day-col">DAYS</div>
                   <div className="col date-col">END DATE</div>
@@ -1635,7 +1719,7 @@ const result = [];
                         </div>
                       </div>
                       <div className="col assigned-col completed-data-cell"><span className="completed-cell-text">{task.assignedTo?.join(', ') || '-'}</span></div>
-                      <div className="col status-col completed-status-cell"><span className="status-badge status-text-completed">completed</span></div>
+                      <div className="col status-col completed-status-cell"><span className="completed-on-date">{formatDateShort(task.completedAt)}</span></div>
                       <div className="col date-col completed-data-cell"><span className="completed-cell-text">{task.startDate || '-'}</span></div>
                       <div className="col day-col completed-data-cell"><span className="completed-cell-text">{task.days || '-'}</span></div>
                       <div className="col date-col completed-data-cell"><span className="completed-cell-text">{task.endDate || '-'}</span></div>
@@ -1704,10 +1788,36 @@ const result = [];
                   <small>Adds a page per supervisor with their tasks across projects, including parent &amp; child tasks for context.</small>
                 </span>
               </label>
+              <label className="combined-option">
+                <input
+                  type="checkbox"
+                  checked={includeCompletedReport}
+                  onChange={e => setIncludeCompletedReport(e.target.checked)}
+                />
+                <span>
+                  <strong>Include completed-tasks page</strong>
+                  <small>A separate page celebrating tasks finished in the chosen window, grouped by project with a per-project tally.</small>
+                </span>
+              </label>
+              {includeCompletedReport && (
+                <div className="completed-range-picker">
+                  <div className="completed-range-presets">
+                    <button type="button" className={`range-preset-btn ${completedRangeMode === '7' ? 'active' : ''}`} onClick={() => setCompletedRangeMode('7')}>Last 7 days</button>
+                    <button type="button" className={`range-preset-btn ${completedRangeMode === '30' ? 'active' : ''}`} onClick={() => setCompletedRangeMode('30')}>Last 30 days</button>
+                    <button type="button" className={`range-preset-btn ${completedRangeMode === 'custom' ? 'active' : ''}`} onClick={() => { setCompletedRangeMode('custom'); setCompletedCustomRange(r => ({ start: r.start || shiftIsoDate(reportDate, -6), end: r.end || reportDate })); }}>Custom range</button>
+                  </div>
+                  {completedRangeMode === 'custom' && (
+                    <div className="completed-range-custom">
+                      <label>From <input type="date" value={completedCustomRange.start} max={reportDate} onChange={e => setCompletedCustomRange(r => ({ ...r, start: e.target.value }))} /></label>
+                      <label>To <input type="date" value={completedCustomRange.end} max={reportDate} onChange={e => setCompletedCustomRange(r => ({ ...r, end: e.target.value }))} /></label>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="combined-modal-footer">
               <button className="secondary-btn" onClick={() => setShowCombinedModal(false)}>Cancel</button>
-              <button className="secondary-btn combined-btn" onClick={() => handleCombinedReport(includeSupervisorReport)}>Generate Report</button>
+              <button className="secondary-btn combined-btn" onClick={() => handleCombinedReport(includeSupervisorReport, buildCompletedOpts())}>Generate Report</button>
             </div>
           </div>
         </div>

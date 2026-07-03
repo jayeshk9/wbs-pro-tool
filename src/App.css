@@ -197,6 +197,29 @@ input[type="number"] {
 .combined-option span { display: flex; flex-direction: column; gap: 3px; }
 .combined-option strong { font-size: 14px; color: #111827; }
 .combined-option small { font-size: 12px; color: #6b7280; line-height: 1.4; }
+.combined-option + .combined-option { margin-top: 16px; }
+.completed-range-picker { margin: 12px 0 0 26px; display: flex; flex-direction: column; gap: 10px; }
+.completed-range-presets { display: flex; gap: 8px; flex-wrap: wrap; }
+.range-preset-btn {
+  font-size: 12px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: #374151;
+  cursor: pointer;
+}
+.range-preset-btn:hover { background: #f3f4f6; }
+.range-preset-btn.active { background: #111827; color: #fff; border-color: #111827; }
+.completed-range-custom { display: flex; gap: 12px; flex-wrap: wrap; }
+.completed-range-custom label { font-size: 12px; color: #6b7280; display: flex; align-items: center; gap: 6px; }
+.completed-range-custom input[type="date"] {
+  font-size: 12px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.completed-on-date { font-size: 12px; color: var(--green-text); font-weight: 500; }
 .combined-modal-footer {
   display: flex;
   justify-content: flex-end;
