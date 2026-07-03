@@ -589,6 +589,14 @@ function App() {
     return `${dt.getFullYear()}-${mm}-${dd}`;
   };
 
+  // Whole-day difference a - b (both YYYY-MM-DD); positive = a is later (overrun). null if either missing.
+  const dayDiff = (a, b) => {
+    if (!a || !b) return null;
+    const [ay, am, ad] = a.split('-').map(Number);
+    const [by, bm, bd] = b.split('-').map(Number);
+    return Math.round((new Date(ay, am - 1, ad) - new Date(by, bm - 1, bd)) / 86400000);
+  };
+
   const displayTasks = viewingVersion ? viewingVersion.tasks : tasks;
   const displayReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
 
@@ -771,7 +779,10 @@ const result = [];
       if (completedMode && task.isGhost) {
         return [wbsCell, indent + (task.text || 'Unnamed'), '', '', '', '', '', ''];
       }
-      const col3 = completedMode ? formatDateShort(task.completedAt) : statusText;
+      // The completed-on cell is custom-drawn in didDrawCell (date | Exp dev / Orig dev). Reserve a
+      // second line of height only when there are two stacked deviations (expected + original).
+      const completedTwoLine = completedMode && !!(task.origEndDate && task.origEndDate !== task.endDate);
+      const col3 = completedMode ? `${formatDateShort(task.completedAt)}${completedTwoLine ? '\n ' : ''}` : statusText;
       return [wbsCell, indent + task.text, task.assignedTo.join(', ') || '', col3, startStr, daysStr, endStr, task.remarks || ''];
     });
 
@@ -830,6 +841,8 @@ const result = [];
           // Ghost ancestors have no data cells — leave them blank (don't run diff/fraction logic
           // against the ancestor's own dates, which would otherwise re-draw values in didDrawCell).
           if (completedMode && task.isGhost) return;
+          // Completed-on cell is fully custom-drawn (date + deviation partitions) — clear default text.
+          if (completedMode && c === 3) { data.cell.text = ['']; return; }
           let hasDiff = false;
           if (c === 4 && task.origStartDate && task.origStartDate !== task.startDate) hasDiff = true;
           if (c === 5 && task.origDays && String(task.origDays) !== String(task.days)) hasDiff = true;
@@ -868,6 +881,36 @@ const result = [];
           }
           // Ghost ancestors: nothing else to draw (data cells are intentionally blank).
           if (completedMode && task.isGhost) return;
+          // Completed-on cell — vertical split: completion date (left) | deviations (right).
+          // The right side is split horizontally: deviation vs expected end (top), vs original end (bottom).
+          // Deviation = completion − planned end, in days: +n late (red), −n / 0 early or on time (green).
+          if (completedMode && c === 3) {
+            const x = data.cell.x, y = data.cell.y, w = data.cell.width, h = data.cell.height;
+            const splitX = x + w * 0.55;
+            pdfDoc.setDrawColor(120, 120, 120); pdfDoc.setLineWidth(0.15);
+            pdfDoc.line(splitX, y, splitX, y + h);
+            pdfDoc.setFont('helvetica', 'normal'); pdfDoc.setFontSize(8); pdfDoc.setTextColor(0, 0, 0);
+            pdfDoc.text(formatDateShort(task.completedAt), (x + splitX) / 2, y + h / 2, { align: 'center', baseline: 'middle' });
+            const items = [];
+            if (task.endDate) items.push({ label: 'Exp', d: dayDiff(task.completedAt, task.endDate) });
+            if (task.origEndDate && task.origEndDate !== task.endDate) items.push({ label: 'Orig', d: dayDiff(task.completedAt, task.origEndDate) });
+            const rcx = (splitX + x + w) / 2;
+            const drawDev = (item, cy) => {
+              if (!item || item.d == null) return;
+              const late = item.d > 0;
+              pdfDoc.setFont('helvetica', 'normal'); pdfDoc.setFontSize(5.5);
+              pdfDoc.setTextColor(...(late ? [190, 50, 50] : [30, 120, 70]));
+              pdfDoc.text(`${item.label}: ${item.d > 0 ? '+' : ''}${item.d}d`, rcx, cy, { align: 'center', baseline: 'middle' });
+            };
+            if (items.length === 2) {
+              pdfDoc.line(splitX, y + h / 2, x + w, y + h / 2);
+              drawDev(items[0], y + h / 4);
+              drawDev(items[1], y + 3 * h / 4);
+            } else if (items.length === 1) {
+              drawDev(items[0], y + h / 2);
+            }
+            return;
+          }
           if (c === 3 && task.statusType === 'fraction') {
             const yest = parseFloat(task.tillYest) || 0, tod = parseFloat(task.today) || 0;
             const tot = parseFloat(task.totalTarget) || 0, wd = parseFloat(task.days) || 0;
@@ -1030,16 +1073,41 @@ const result = [];
     pdfDoc.setFontSize(10);
     pdfDoc.text(`${formatDateShort(windowStart)} – ${formatDateShort(windowEnd)}  ·  all projects`, 14, 22);
 
-    let cursorY = 30;
-    pdfDoc.setFontSize(11);
-    pdfDoc.setFont('helvetica', 'bold');
-    pdfDoc.text(`Total completed: ${total}`, 14, cursorY);
-    pdfDoc.setFont('helvetica', 'normal');
-    pdfDoc.setFontSize(9);
-    const tally = sections.map(s => `${s.projectName}: ${s.completed.length}`).join('        ');
-    const tallyLines = pdfDoc.splitTextToSize(tally, pageWidth - 28);
-    pdfDoc.text(tallyLines, 14, cursorY + 6);
-    cursorY += 6 + tallyLines.length * 5 + 4;
+    // Per-project tally as metric cards: project name (small) on top, big count below — so the
+    // headline numbers actually read at a glance. First card is the grand total (accented).
+    const cards = [{ label: 'Total completed', value: total, accent: true },
+                   ...sections.map(s => ({ label: s.projectName, value: s.completed.length, accent: false }))];
+    const usableW = pageWidth - 28;
+    const gap = 3;
+    const minCardW = 34;
+    const perRow = Math.max(1, Math.min(cards.length, Math.floor((usableW + gap) / (minCardW + gap))));
+    const cardW = (usableW - gap * (perRow - 1)) / perRow;
+    const cardH = 16;
+    const cardsY = 26;
+    cards.forEach((card, i) => {
+      const col = i % perRow, rowN = Math.floor(i / perRow);
+      const cx = 14 + col * (cardW + gap);
+      const cy = cardsY + rowN * (cardH + gap);
+      if (card.accent) { pdfDoc.setFillColor(225, 240, 231); pdfDoc.setDrawColor(150, 200, 175); }
+      else { pdfDoc.setFillColor(242, 242, 242); pdfDoc.setDrawColor(210, 210, 210); }
+      pdfDoc.setLineWidth(0.2);
+      pdfDoc.roundedRect(cx, cy, cardW, cardH, 1.5, 1.5, 'FD');
+      // project name (small) on top — shrink then ellipsize to fit the card
+      pdfDoc.setFont('helvetica', 'normal'); pdfDoc.setTextColor(90, 90, 90);
+      let label = card.label, lf = 8;
+      pdfDoc.setFontSize(lf);
+      while (lf > 5 && pdfDoc.getTextWidth(label) > cardW - 4) { lf -= 0.5; pdfDoc.setFontSize(lf); }
+      while (label.length > 3 && pdfDoc.getTextWidth(label + '…') > cardW - 4) label = label.slice(0, -1);
+      if (label !== card.label) label += '…';
+      pdfDoc.text(label, cx + cardW / 2, cy + 5, { align: 'center', baseline: 'middle' });
+      // count (big) on bottom
+      pdfDoc.setFont('helvetica', 'bold'); pdfDoc.setFontSize(18);
+      pdfDoc.setTextColor(...(card.accent ? [20, 110, 75] : [30, 30, 30]));
+      pdfDoc.text(String(card.value), cx + cardW / 2, cy + cardH - 5, { align: 'center', baseline: 'middle' });
+    });
+    pdfDoc.setFont('helvetica', 'normal'); pdfDoc.setTextColor(0, 0, 0);
+    const cardRows = Math.ceil(cards.length / perRow);
+    let cursorY = cardsY + cardRows * cardH + (cardRows - 1) * gap + 8;
 
     sections.forEach((section) => {
       if (cursorY > pageHeight - 40) { pdfDoc.addPage(); cursorY = 20; }
