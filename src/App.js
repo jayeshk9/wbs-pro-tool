@@ -1168,7 +1168,7 @@ const result = [];
 
   // Pure digest of one project's tasks for the report date. Feeds the AI summary and
   // doubles as the no-AI fallback. Reads only fields already on each task.
-  const computeReportStats = (projectTasks, projectName, effectiveReportDate) => {
+  const computeReportStats = (projectTasks, projectName, effectiveReportDate, todayRef = TODAY) => {
     const completedToday = [];
     const stuck = [];
     let inProgress = 0, toBeStarted = 0;
@@ -1179,7 +1179,7 @@ const result = [];
         name: (t.text || '').trim() || '(unnamed)',
         assignedTo: Array.isArray(t.assignedTo) ? t.assignedTo : [],
       };
-      if (t.status === 'completed' && t.completedAt === TODAY) {
+      if (t.status === 'completed' && t.completedAt === todayRef) {
         const devExp = t.endDate ? dayDiff(t.completedAt, t.endDate) : null;
         const devOrig = (t.origEndDate && t.origEndDate !== t.endDate) ? dayDiff(t.completedAt, t.origEndDate) : null;
         completedToday.push({ ...item, deviation: formatDeviation(devExp, devOrig) });
@@ -1235,7 +1235,15 @@ const result = [];
       .replace(/[—–]/g, '-')
       .replace(/[^\t\n\x20-\x7E]/g, ''); // strip any remaining non-ASCII for font safety
     const lines = pdfDoc.splitTextToSize(clean, pageWidth - 28);
-    pdfDoc.text(lines, 14, 32);
+    // Paginate — jsPDF does not auto-break a text() array, so a long summary would
+    // otherwise be drawn off the bottom of page 1 and silently lost.
+    const pageHeight = pdfDoc.internal.pageSize.getHeight();
+    let y = 32;
+    for (const ln of lines) {
+      if (y > pageHeight - 12) { pdfDoc.addPage(); y = 15; }
+      pdfDoc.text(ln, 14, y);
+      y += 5;
+    }
   };
 
   // Shareable PDF for the current project: summary page + the normal report tables.
@@ -1251,7 +1259,13 @@ const result = [];
       buildProjectTable(pdfDoc, effectiveTasksFull, currentProjectName, effectiveReportDate);
     } else {
       const activeLeads = projects.find(p => p.id === activeProjectId)?.assignedTo || [];
-      buildProjectTable(pdfDoc, filteredTasks, currentProjectName, effectiveReportDate, effectiveTasksFull, null, activeLeads);
+      // Ignore transient UI filters for the shared report — send the whole project's
+      // standard view (active tasks + those completed today) so page 2 matches the
+      // page-1 summary, which is always computed from the full project.
+      const reportTasks = effectiveTasksFull
+        .map((t, i) => ({ ...t, originalIndex: i }))
+        .filter(t => t.status !== 'completed' || t.completedAt === TODAY);
+      buildProjectTable(pdfDoc, reportTasks, currentProjectName, effectiveReportDate, effectiveTasksFull, null, activeLeads);
     }
     stampEstateHeader(pdfDoc);
     return pdfDoc;
@@ -1273,15 +1287,17 @@ const result = [];
   const openShareModal = () => {
     const projectTasks = viewingVersion ? viewingVersion.tasks : tasks;
     const effectiveReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
-    const stats = computeReportStats(projectTasks, currentProjectName, effectiveReportDate);
+    const stats = computeReportStats(projectTasks, currentProjectName, effectiveReportDate, viewingVersion ? viewingVersion.reportDate : TODAY);
     setShareStats(stats);
     setShareSummary(formatDigestText(stats));
     setShowShareModal(true);
     if (!SUMMARY_API_URL) return; // no worker configured → keep the digest
     setShareLoading(true);
+    const headers = { 'content-type': 'application/json' };
+    if (process.env.REACT_APP_SUMMARY_KEY) headers['x-wbs-key'] = process.env.REACT_APP_SUMMARY_KEY;
     fetch(SUMMARY_API_URL, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify({ stats }),
     })
       .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
@@ -1298,8 +1314,14 @@ const result = [];
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
     if (navigator.clipboard) navigator.clipboard.writeText(shareSummary).catch(() => {});
-    const text = shareSummary.length > 1800 ? shareSummary.slice(0, 1790) + '…' : shareSummary;
-    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
+    if (!viewingVersion) saveVersion(tasks, reportDate); // a download is a real share action
+    // Spread by code points so truncation never splits an emoji surrogate pair; guard the encode.
+    const text = [...shareSummary].slice(0, 1200).join('');
+    try {
+      window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
+    } catch {
+      window.open('https://wa.me/', '_blank', 'noopener');
+    }
     setShowShareModal(false);
     alert('PDF downloaded and summary copied.\n\nIn WhatsApp: pick a chat, paste the summary if it is not already there, then attach the downloaded PDF from your Downloads.');
   };
@@ -1317,13 +1339,13 @@ const result = [];
       return;
     }
     const file = new File([blob], filename, { type: 'application/pdf' });
-    if (!viewingVersion) saveVersion(tasks, reportDate);
     if (canSharePdf(file)) {
       try {
         await navigator.share({ files: [file], text: shareSummary, title: `${currentProjectName} — Site Update` });
+        if (!viewingVersion) saveVersion(tasks, reportDate); // only snapshot a share that actually happened
         setShowShareModal(false);
       } catch (err) {
-        if (err && err.name === 'AbortError') return; // user dismissed the share sheet
+        if (err && err.name === 'AbortError') return; // user dismissed the share sheet — no snapshot
         console.error('navigator.share failed, falling back:', err);
         shareFallback(blob, filename);
       }
@@ -2187,7 +2209,7 @@ const result = [];
               <p className="share-hint">
                 {shareLoading
                   ? 'Writing AI summary…'
-                  : 'This becomes page 1 of the PDF and the WhatsApp message. Edit it if you like, then share.'}
+                  : 'This becomes page 1 of the PDF, and is prefilled as the WhatsApp message (some phones send the text separately from the file). Edit if you like, then share.'}
               </p>
               <textarea
                 className="share-summary-textarea"
