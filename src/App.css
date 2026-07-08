@@ -1318,3 +1318,20 @@ input[type="number"] {
   .remarks-textarea { min-height: 32px; padding: 7px 10px; margin-bottom: 6px; }
   .task-input-field { padding: 6px 0; }
 }
+
+/* WhatsApp share modal */
+.share-hint { font-size: 12px; color: #6b7280; margin: 0 0 10px; line-height: 1.4; }
+.share-summary-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #111827;
+  resize: vertical;
+}
+.share-summary-textarea:focus { outline: none; border-color: var(--primary); }
+.share-counts { font-size: 12px; color: #4b5563; margin: 10px 0 0; }

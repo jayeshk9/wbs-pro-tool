@@ -246,6 +246,12 @@ function App() {
   const [historyVersions, setHistoryVersions] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  // WhatsApp share modal
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareSummary, setShareSummary] = useState('');
+  const [shareStats, setShareStats] = useState(null);
+  const [shareLoading, setShareLoading] = useState(false);
+
   const [showCompletedSection, setShowCompletedSection] = useState(false);
   const [completedCollapsedIds, setCompletedCollapsedIds] = useState(new Set());
   const toggleCompletedCollapse = (id) => setCompletedCollapsedIds(prev => {
@@ -1134,6 +1140,198 @@ const result = [];
     }
   };
 
+  // ---------- WhatsApp share: stats digest → AI summary → PDF with summary page ----------
+
+  // "Parent › Child › Task" breadcrumb, built by walking up the level hierarchy.
+  const taskBreadcrumb = (taskArr, index) => {
+    const path = [];
+    let targetLvl = taskArr[index].level - 1;
+    for (let i = index - 1; i >= 0 && targetLvl >= 0; i--) {
+      if (taskArr[i].level === targetLvl) {
+        path.unshift((taskArr[i].text || '').trim() || `(L${targetLvl})`);
+        targetLvl--;
+      }
+    }
+    return path;
+  };
+
+  // Human deviation vs expected end (and vs baseline/original end when it differs).
+  // devExp/devOrig are day counts from dayDiff(completedAt, endDate): +late, -early.
+  const formatDeviation = (devExp, devOrig) => {
+    const word = (d) => d > 0 ? `+${d}d late` : d < 0 ? `${-d}d early` : 'on time';
+    if (devExp == null && devOrig == null) return 'no end date set';
+    const parts = [];
+    if (devExp != null) parts.push(word(devExp));
+    if (devOrig != null) parts.push(`${word(devOrig)} vs orig`);
+    return parts.join(', ');
+  };
+
+  // Pure digest of one project's tasks for the report date. Feeds the AI summary and
+  // doubles as the no-AI fallback. Reads only fields already on each task.
+  const computeReportStats = (projectTasks, projectName, effectiveReportDate) => {
+    const completedToday = [];
+    const stuck = [];
+    let inProgress = 0, toBeStarted = 0;
+    projectTasks.forEach((t, i) => {
+      if (t.statusType === 'fraction') return; // fraction tasks carry no status/completedAt
+      const item = {
+        path: taskBreadcrumb(projectTasks, i),
+        name: (t.text || '').trim() || '(unnamed)',
+        assignedTo: Array.isArray(t.assignedTo) ? t.assignedTo : [],
+      };
+      if (t.status === 'completed' && t.completedAt === TODAY) {
+        const devExp = t.endDate ? dayDiff(t.completedAt, t.endDate) : null;
+        const devOrig = (t.origEndDate && t.origEndDate !== t.endDate) ? dayDiff(t.completedAt, t.origEndDate) : null;
+        completedToday.push({ ...item, deviation: formatDeviation(devExp, devOrig) });
+      } else if (t.status === 'stuck') {
+        stuck.push({ ...item, remarks: (t.remarks || '').trim() });
+      } else if (t.status === 'in progress') inProgress++;
+      else if (t.status === 'to be started') toBeStarted++;
+    });
+    return {
+      project: projectName,
+      date: formatDateShort(effectiveReportDate),
+      counts: { completedToday: completedToday.length, stuck: stuck.length, inProgress, toBeStarted },
+      completedToday,
+      stuck,
+    };
+  };
+
+  // Deterministic WhatsApp text straight from the digest — instant placeholder in the
+  // modal, and the fallback whenever the AI worker is unset or unreachable.
+  const formatDigestText = (stats) => {
+    const line = (it, tail) => `• ${[...it.path, it.name].join(' › ')} — ${tail}${it.assignedTo.length ? ` [${it.assignedTo.join(', ')}]` : ''}`;
+    const out = [
+      `*${stats.project} — Site Update*`,
+      `_${stats.date}_`,
+      '',
+      `✅ *Completed today (${stats.counts.completedToday})*`,
+      ...(stats.completedToday.length ? stats.completedToday.map(it => line(it, it.deviation)) : ['• None']),
+      '',
+      `⛔ *Stuck (${stats.counts.stuck})*`,
+      ...(stats.stuck.length ? stats.stuck.map(it => line(it, it.remarks || 'no remark added')) : ['• None']),
+    ];
+    return out.join('\n');
+  };
+
+  // Renders the summary as page 1 text, wrapped to the landscape width (markup stripped).
+  const buildSummaryPage = (pdfDoc, summaryText, projectName, effectiveReportDate) => {
+    const pageWidth = pdfDoc.internal.pageSize.getWidth();
+    pdfDoc.setFontSize(16);
+    pdfDoc.setFont('helvetica', 'normal');
+    pdfDoc.setTextColor(0, 0, 0);
+    pdfDoc.text(`${projectName} Report`, 14, 15);
+    pdfDoc.setFontSize(10);
+    pdfDoc.text(`Date: ${formatDateShort(effectiveReportDate)}    |    Summary`, 14, 22);
+    pdfDoc.setFontSize(11);
+    // jsPDF's default font can't render emoji / typographic glyphs — map the WhatsApp
+    // markup to ASCII for the printed page (the shared WhatsApp text keeps its emoji).
+    const clean = (summaryText || '')
+      .replace(/[*_]/g, '')
+      .replace(/✅/g, '[Done]')
+      .replace(/⛔/g, '[Stuck]')
+      .replace(/[›»]/g, '>')
+      .replace(/[•·]/g, '-')
+      .replace(/[—–]/g, '-')
+      .replace(/[^\t\n\x20-\x7E]/g, ''); // strip any remaining non-ASCII for font safety
+    const lines = pdfDoc.splitTextToSize(clean, pageWidth - 28);
+    pdfDoc.text(lines, 14, 32);
+  };
+
+  // Shareable PDF for the current project: summary page + the normal report tables.
+  // Built synchronously so it can run inside the share click handler — iOS keeps the
+  // tap's user-gesture activation only if no network await precedes navigator.share.
+  const buildShareableProjectPdf = (summaryText) => {
+    const effectiveTasksFull = viewingVersion ? viewingVersion.tasks : tasks;
+    const effectiveReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
+    const pdfDoc = new jsPDF('l', 'mm', 'a4');
+    buildSummaryPage(pdfDoc, summaryText, currentProjectName, effectiveReportDate);
+    pdfDoc.addPage();
+    if (viewingVersion) {
+      buildProjectTable(pdfDoc, effectiveTasksFull, currentProjectName, effectiveReportDate);
+    } else {
+      const activeLeads = projects.find(p => p.id === activeProjectId)?.assignedTo || [];
+      buildProjectTable(pdfDoc, filteredTasks, currentProjectName, effectiveReportDate, effectiveTasksFull, null, activeLeads);
+    }
+    stampEstateHeader(pdfDoc);
+    return pdfDoc;
+  };
+
+  const SUMMARY_API_URL = process.env.REACT_APP_SUMMARY_API_URL || '';
+
+  // Web Share Level 2 file support — gate on a real File, in a secure context, within a gesture.
+  const canSharePdf = (file) =>
+    typeof navigator !== 'undefined' &&
+    window.isSecureContext &&
+    typeof navigator.share === 'function' &&
+    typeof navigator.canShare === 'function' &&
+    navigator.canShare({ files: [file] });
+
+  // Open the modal: compute the digest instantly (works with zero backend), then ask the
+  // Worker for a nicer AI summary. The network call happens HERE (on open), never in the
+  // share tap — so the tap keeps its activation for navigator.share.
+  const openShareModal = () => {
+    const projectTasks = viewingVersion ? viewingVersion.tasks : tasks;
+    const effectiveReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
+    const stats = computeReportStats(projectTasks, currentProjectName, effectiveReportDate);
+    setShareStats(stats);
+    setShareSummary(formatDigestText(stats));
+    setShowShareModal(true);
+    if (!SUMMARY_API_URL) return; // no worker configured → keep the digest
+    setShareLoading(true);
+    fetch(SUMMARY_API_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stats }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+      .then(d => { if (d && d.summary) setShareSummary(d.summary); })
+      .catch(err => console.error('AI summary failed, using digest:', err))
+      .finally(() => setShareLoading(false));
+  };
+
+  // Desktop / unsupported: download the PDF, copy the text, open WhatsApp prefilled with
+  // the summary (wa.me can't carry a file — the user attaches the downloaded PDF).
+  const shareFallback = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), { href: url, download: filename });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    if (navigator.clipboard) navigator.clipboard.writeText(shareSummary).catch(() => {});
+    const text = shareSummary.length > 1800 ? shareSummary.slice(0, 1790) + '…' : shareSummary;
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
+    setShowShareModal(false);
+    alert('PDF downloaded and summary copied.\n\nIn WhatsApp: pick a chat, paste the summary if it is not already there, then attach the downloaded PDF from your Downloads.');
+  };
+
+  const shareOnWhatsApp = async () => {
+    const effectiveReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
+    const safeName = (currentProjectName || 'WBS').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') || 'WBS';
+    const filename = `WBS_${safeName}_${formatDateFile(effectiveReportDate)}.pdf`;
+    let blob;
+    try {
+      blob = buildShareableProjectPdf(shareSummary).output('blob');
+    } catch (err) {
+      console.error('Share PDF build failed:', err);
+      alert(`Could not build the report PDF.\n\n${err?.message || err}`);
+      return;
+    }
+    const file = new File([blob], filename, { type: 'application/pdf' });
+    if (!viewingVersion) saveVersion(tasks, reportDate);
+    if (canSharePdf(file)) {
+      try {
+        await navigator.share({ files: [file], text: shareSummary, title: `${currentProjectName} — Site Update` });
+        setShowShareModal(false);
+      } catch (err) {
+        if (err && err.name === 'AbortError') return; // user dismissed the share sheet
+        console.error('navigator.share failed, falling back:', err);
+        shareFallback(blob, filename);
+      }
+    } else {
+      shareFallback(blob, filename);
+    }
+  };
+
   // Print current project
   const handlePrintPDF = () => {
     const effectiveTasksFull = viewingVersion ? viewingVersion.tasks : tasks;
@@ -1404,6 +1602,7 @@ const result = [];
               <button className="secondary-btn history-btn" onClick={() => { setShowHistory(true); loadHistory(); }}>History</button>
               <button className="secondary-btn print-btn" onClick={handlePrintPDF}>Print PDF</button>
               <button className="secondary-btn combined-btn" onClick={() => { setIncludeSupervisorReport(true); setShowCombinedModal(true); }}>Combined Report</button>
+              <button className="secondary-btn combined-btn" onClick={openShareModal}>Share on WhatsApp</button>
               <button className="secondary-btn" onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: true}))})) : syncTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
               <button className="secondary-btn" onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: false}))})) : syncTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
               <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && syncTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', statusType: 'text', tillYest: '', today: '', totalTarget: '', origStartDate: '', origDays: '', origEndDate: '' }])}>Clear All</button>
@@ -1972,6 +2171,42 @@ const result = [];
             <div className="combined-modal-footer">
               <button className="secondary-btn" onClick={() => setShowCombinedModal(false)}>Cancel</button>
               <button className="secondary-btn combined-btn" onClick={() => handleCombinedReport(includeSupervisorReport, buildCompletedOpts())}>Generate Report</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showShareModal && (
+        <div className="history-overlay" onClick={() => setShowShareModal(false)}>
+          <div className="history-modal combined-modal" onClick={e => e.stopPropagation()}>
+            <div className="history-modal-header">
+              <h2>Share on WhatsApp</h2>
+              <button className="history-close-btn" onClick={() => setShowShareModal(false)}>×</button>
+            </div>
+            <div className="history-modal-body combined-modal-body">
+              <p className="share-hint">
+                {shareLoading
+                  ? 'Writing AI summary…'
+                  : 'This becomes page 1 of the PDF and the WhatsApp message. Edit it if you like, then share.'}
+              </p>
+              <textarea
+                className="share-summary-textarea"
+                value={shareSummary}
+                onChange={e => setShareSummary(e.target.value)}
+                rows={14}
+                spellCheck={false}
+              />
+              {shareStats && (
+                <p className="share-counts">
+                  ✅ {shareStats.counts.completedToday} completed today &nbsp;·&nbsp; ⛔ {shareStats.counts.stuck} stuck
+                  {SUMMARY_API_URL ? '' : ' · AI worker not configured, using built-in digest'}
+                </p>
+              )}
+            </div>
+            <div className="combined-modal-footer">
+              <button className="secondary-btn" onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(shareSummary); }}>Copy text</button>
+              <button className="secondary-btn" onClick={() => setShowShareModal(false)}>Cancel</button>
+              <button className="secondary-btn combined-btn" onClick={shareOnWhatsApp}>Share on WhatsApp</button>
             </div>
           </div>
         </div>
