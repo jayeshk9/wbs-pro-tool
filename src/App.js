@@ -1168,7 +1168,7 @@ const result = [];
 
   // Pure digest of one project's tasks for the report date. Feeds the AI summary and
   // doubles as the no-AI fallback. Reads only fields already on each task.
-  const computeReportStats = (projectTasks, projectName, effectiveReportDate, todayRef = TODAY) => {
+  const computeReportStats = (projectTasks, projectName, effectiveReportDate) => {
     const completedToday = [];
     const stuck = [];
     let inProgress = 0, toBeStarted = 0;
@@ -1179,7 +1179,7 @@ const result = [];
         name: (t.text || '').trim() || '(unnamed)',
         assignedTo: Array.isArray(t.assignedTo) ? t.assignedTo : [],
       };
-      if (t.status === 'completed' && t.completedAt === todayRef) {
+      if (t.status === 'completed' && t.completedAt === effectiveReportDate) {
         const devExp = t.endDate ? dayDiff(t.completedAt, t.endDate) : null;
         const devOrig = (t.origEndDate && t.origEndDate !== t.endDate) ? dayDiff(t.completedAt, t.origEndDate) : null;
         completedToday.push({ ...item, deviation: formatDeviation(devExp, devOrig) });
@@ -1264,7 +1264,7 @@ const result = [];
       // page-1 summary, which is always computed from the full project.
       const reportTasks = effectiveTasksFull
         .map((t, i) => ({ ...t, originalIndex: i }))
-        .filter(t => t.status !== 'completed' || t.completedAt === TODAY);
+        .filter(t => t.status !== 'completed' || t.completedAt === effectiveReportDate);
       buildProjectTable(pdfDoc, reportTasks, currentProjectName, effectiveReportDate, effectiveTasksFull, null, activeLeads);
     }
     stampEstateHeader(pdfDoc);
@@ -1287,7 +1287,7 @@ const result = [];
   const openShareModal = () => {
     const projectTasks = viewingVersion ? viewingVersion.tasks : tasks;
     const effectiveReportDate = viewingVersion ? viewingVersion.reportDate : reportDate;
-    const stats = computeReportStats(projectTasks, currentProjectName, effectiveReportDate, viewingVersion ? viewingVersion.reportDate : TODAY);
+    const stats = computeReportStats(projectTasks, currentProjectName, effectiveReportDate);
     setShareStats(stats);
     setShareSummary(formatDigestText(stats));
     setShowShareModal(true);
