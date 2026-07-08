@@ -1233,3 +1233,53 @@ input[type="number"] {
 .react-datepicker__day.holiday-eid:hover {
   background-color: #15803d !important;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Mobile: landscape-only. Prompt to rotate when held in portrait.
+   Scoped to touch devices (pointer: coarse) so desktop windows
+   in a portrait aspect ratio are never blocked.
+   ───────────────────────────────────────────────────────────── */
+.rotate-overlay { display: none; }
+
+@media (orientation: portrait) and (pointer: coarse) {
+  .rotate-overlay {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: max(28px, env(safe-area-inset-top)) 28px max(28px, env(safe-area-inset-bottom));
+    background: #111827;
+    color: #f9fafb;
+    /* Block scroll/interaction with the app behind. */
+    overscroll-behavior: contain;
+    touch-action: none;
+  }
+  .rotate-overlay-inner { max-width: 320px; }
+  .rotate-phone { color: var(--primary); margin-bottom: 22px; }
+  .rotate-phone svg { animation: rotate-hint 2.4s ease-in-out infinite; transform-origin: 50% 50%; }
+  .rotate-overlay h2 { font-size: 22px; font-weight: 700; margin: 0 0 10px; color: #fff; }
+  .rotate-overlay p { font-size: 15px; line-height: 1.5; margin: 0; color: #d1d5db; }
+
+  /* Keep the app from painting/scrolling underneath the overlay. */
+  .App { display: none; }
+}
+
+@keyframes rotate-hint {
+  0%, 30%   { transform: rotate(0deg); }
+  55%, 80%  { transform: rotate(-90deg); }
+  100%      { transform: rotate(0deg); }
+}
+
+/* Landscape on touch devices: trim chrome so the tool fits a short
+   viewport and controls wrap instead of overflowing. Desktop is
+   untouched (pointer: fine). */
+@media (orientation: landscape) and (pointer: coarse) {
+  .App { padding: 12px; }
+  .header { margin-bottom: 10px; }
+  .header-top { flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  .header-controls { flex-wrap: wrap; gap: 12px; }
+  .bulk-actions { flex-wrap: wrap; }
+}

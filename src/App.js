@@ -1376,6 +1376,20 @@ const result = [];
 
   return (
     <WeatherContext.Provider value={weatherForecast}>
+    <div className="rotate-overlay" role="alertdialog" aria-modal="true" aria-label="Please rotate your device to landscape">
+      <div className="rotate-overlay-inner">
+        <div className="rotate-phone" aria-hidden="true">
+          <svg viewBox="0 0 120 120" width="96" height="96" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect className="rotate-phone-body" x="40" y="14" width="40" height="72" rx="7" ry="7" stroke="currentColor" strokeWidth="4"/>
+            <line x1="53" y1="22" x2="67" y2="22" stroke="currentColor" strokeWidth="4" strokeLinecap="round"/>
+            <path className="rotate-phone-arrow" d="M96 66 a40 40 0 0 1 -14 22" stroke="currentColor" strokeWidth="4" strokeLinecap="round" fill="none"/>
+            <path className="rotate-phone-arrow" d="M84 86 l-4 -12 l14 4 z" fill="currentColor"/>
+          </svg>
+        </div>
+        <h2>Please rotate your phone</h2>
+        <p>WBS Pro works in landscape. Turn your device sideways to continue.</p>
+      </div>
+    </div>
     <div className="App">
       <header className="header">
         <div className="header-top">
