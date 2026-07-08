@@ -1273,13 +1273,48 @@ input[type="number"] {
   100%      { transform: rotate(0deg); }
 }
 
-/* Landscape on touch devices: trim chrome so the tool fits a short
-   viewport and controls wrap instead of overflowing. Desktop is
-   untouched (pointer: fine). */
+/* Landscape on touch devices — phones, tablets, iPads. Desktop is never
+   affected (pointer: fine). The dense grid is wider than most touch
+   screens, so instead of letting the table drag the page wider than the
+   header (which left an empty gap), the whole app is sized to its widest
+   child and every top bar stretches to match — so it scrolls as one unit.
+   Columns are trimmed so there is less to scroll. */
 @media (orientation: landscape) and (pointer: coarse) {
-  .App { padding: 12px; }
+  .App { padding: 12px; width: max-content; min-width: 100%; }
+  .header, .snapshot-banner, .wbs-container { width: 100%; }
   .header { margin-bottom: 10px; }
-  .header-top { flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  .header-top { flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
   .header-controls { flex-wrap: wrap; gap: 12px; }
-  .bulk-actions { flex-wrap: wrap; }
+  .bulk-actions { flex-wrap: wrap; gap: 6px; }
+
+  /* Keyboard-shortcut legend is dead weight without a physical keyboard. */
+  .controls-shortcuts { display: none; }
+
+  .task-col { width: 320px; }
+  .assigned-col { width: 155px; }
+  .status-col { width: 190px; }
+  .date-col { width: 120px; }
+  .day-col { width: 62px; }
+}
+
+/* Phones (short landscape viewport): compress rows hard so many fit at
+   once, and shrink columns further. Tablets/iPads have vertical room, so
+   they keep the roomier sizing above. */
+@media (orientation: landscape) and (pointer: coarse) and (max-height: 600px) {
+  :root {
+    --row-height: 44px;
+    --input-offset: 5px;
+    --text-size: 12px;
+  }
+  .App { padding: 10px; }
+  .header { margin-bottom: 8px; }
+  .header-top h1 { font-size: 20px; }
+  .header-row { height: 34px; }
+  .num-col { padding-top: 10px; }
+  .drag-handle { padding-top: 10px; }
+  .task-col { width: 260px; }
+  .status-col { width: 172px; }
+  .cell-input { min-height: 32px; margin-bottom: 6px; }
+  .remarks-textarea { min-height: 32px; padding: 7px 10px; margin-bottom: 6px; }
+  .task-input-field { padding: 6px 0; }
 }
