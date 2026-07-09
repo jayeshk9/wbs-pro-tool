@@ -246,6 +246,12 @@ function App() {
   const [historyVersions, setHistoryVersions] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  // Combined report — WhatsApp share summary + pre-fetched project data
+  const [shareSummary, setShareSummary] = useState('');
+  const [shareStats, setShareStats] = useState(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [combinedData, setCombinedData] = useState(null); // project data prefetched on modal open (null = still loading)
+
   const [showCompletedSection, setShowCompletedSection] = useState(false);
   const [completedCollapsedIds, setCompletedCollapsedIds] = useState(new Set());
   const toggleCompletedCollapse = (id) => setCompletedCollapsedIds(prev => {
@@ -1134,6 +1140,301 @@ const result = [];
     }
   };
 
+  // ---------- WhatsApp share: stats digest → AI summary → PDF with summary page ----------
+
+  // "Parent › Child › Task" breadcrumb, built by walking up the level hierarchy.
+  const taskBreadcrumb = (taskArr, index) => {
+    const path = [];
+    let targetLvl = taskArr[index].level - 1;
+    for (let i = index - 1; i >= 0 && targetLvl >= 0; i--) {
+      if (taskArr[i].level === targetLvl) {
+        path.unshift((taskArr[i].text || '').trim() || `(L${targetLvl})`);
+        targetLvl--;
+      }
+    }
+    return path;
+  };
+
+  // Human deviation vs expected end (and vs baseline/original end when it differs).
+  // devExp/devOrig are day counts from dayDiff(completedAt, endDate): +late, -early.
+  const formatDeviation = (devExp, devOrig) => {
+    const word = (d) => d > 0 ? `+${d}d late` : d < 0 ? `${-d}d early` : 'on time';
+    if (devExp == null && devOrig == null) return 'no end date set';
+    const parts = [];
+    if (devExp != null) parts.push(word(devExp));
+    if (devOrig != null) parts.push(`${word(devOrig)} vs orig`);
+    return parts.join(', ');
+  };
+
+  // Pure digest of one project's tasks for the report date. Feeds the AI summary and
+  // doubles as the no-AI fallback. Reads only fields already on each task.
+  const computeReportStats = (projectTasks, projectName, effectiveReportDate) => {
+    const completedToday = [];
+    const stuck = [];
+    let inProgress = 0, toBeStarted = 0;
+    projectTasks.forEach((t, i) => {
+      if (t.statusType === 'fraction') return; // fraction tasks carry no status/completedAt
+      const item = {
+        path: taskBreadcrumb(projectTasks, i),
+        name: (t.text || '').trim() || '(unnamed)',
+        assignedTo: Array.isArray(t.assignedTo) ? t.assignedTo : [],
+      };
+      if (t.status === 'completed' && t.completedAt === effectiveReportDate) {
+        const devExp = t.endDate ? dayDiff(t.completedAt, t.endDate) : null;
+        const devOrig = (t.origEndDate && t.origEndDate !== t.endDate) ? dayDiff(t.completedAt, t.origEndDate) : null;
+        completedToday.push({ ...item, deviation: formatDeviation(devExp, devOrig) });
+      } else if (t.status === 'stuck') {
+        stuck.push({ ...item, remarks: (t.remarks || '').trim() });
+      } else if (t.status === 'in progress') inProgress++;
+      else if (t.status === 'to be started') toBeStarted++;
+    });
+    return {
+      project: projectName,
+      date: formatDateShort(effectiveReportDate),
+      counts: { completedToday: completedToday.length, stuck: stuck.length, inProgress, toBeStarted },
+      completedToday,
+      stuck,
+    };
+  };
+
+  // Roll per-project digests up into one combined stats object for the whole estate.
+  const computeCombinedStats = (projectData, effectiveReportDate) => {
+    const perProject = projectData.map(({ project, tasks: projectTasks }) =>
+      computeReportStats(projectTasks, project.name, effectiveReportDate));
+    const totals = perProject.reduce((a, s) => ({
+      completedToday: a.completedToday + s.counts.completedToday,
+      stuck: a.stuck + s.counts.stuck,
+      inProgress: a.inProgress + s.counts.inProgress,
+      toBeStarted: a.toBeStarted + s.counts.toBeStarted,
+    }), { completedToday: 0, stuck: 0, inProgress: 0, toBeStarted: 0 });
+    return { date: formatDateShort(effectiveReportDate), projects: perProject, totals };
+  };
+
+  // Deterministic WhatsApp text for the whole estate — instant placeholder in the modal,
+  // and the fallback whenever the AI worker is unset or unreachable. Only lists projects
+  // that actually have completed-today or stuck work so the message stays scannable.
+  const formatCombinedDigestText = (combined) => {
+    const line = (it, tail) => `• ${[...it.path, it.name].join(' › ')} — ${tail}${it.assignedTo.length ? ` [${it.assignedTo.join(', ')}]` : ''}`;
+    const out = [
+      `*Ajmer Estate — Site Update*`,
+      `_${combined.date}_`,
+      `✅ ${combined.totals.completedToday} completed today   ⛔ ${combined.totals.stuck} stuck`,
+    ];
+    combined.projects.forEach(s => {
+      if (s.counts.completedToday === 0 && s.counts.stuck === 0) return;
+      out.push('', `*${s.project}*`);
+      out.push(`✅ Completed today (${s.counts.completedToday})`);
+      (s.completedToday.length ? s.completedToday.map(it => line(it, it.deviation)) : ['• None']).forEach(l => out.push(l));
+      out.push(`⛔ Stuck (${s.counts.stuck})`);
+      (s.stuck.length ? s.stuck.map(it => line(it, it.remarks || 'no remark added')) : ['• None']).forEach(l => out.push(l));
+    });
+    return out.join('\n');
+  };
+
+  // Renders the summary as page 1 text, wrapped to the landscape width (markup stripped).
+  const buildSummaryPage = (pdfDoc, summaryText, projectName, effectiveReportDate) => {
+    const pageWidth = pdfDoc.internal.pageSize.getWidth();
+    pdfDoc.setFontSize(16);
+    pdfDoc.setFont('helvetica', 'normal');
+    pdfDoc.setTextColor(0, 0, 0);
+    pdfDoc.text(`${projectName} Report`, 14, 15);
+    pdfDoc.setFontSize(10);
+    pdfDoc.text(`Date: ${formatDateShort(effectiveReportDate)}    |    Summary`, 14, 22);
+    pdfDoc.setFontSize(11);
+    // jsPDF's default font can't render emoji / typographic glyphs — map the WhatsApp
+    // markup to ASCII for the printed page (the shared WhatsApp text keeps its emoji).
+    const clean = (summaryText || '')
+      .replace(/[*_]/g, '')
+      .replace(/✅/g, '[Done]')
+      .replace(/⛔/g, '[Stuck]')
+      .replace(/[›»]/g, '>')
+      .replace(/[•·]/g, '-')
+      .replace(/[—–]/g, '-')
+      .replace(/[^\t\n\x20-\x7E]/g, ''); // strip any remaining non-ASCII for font safety
+    const lines = pdfDoc.splitTextToSize(clean, pageWidth - 28);
+    // Paginate — jsPDF does not auto-break a text() array, so a long summary would
+    // otherwise be drawn off the bottom of page 1 and silently lost.
+    const pageHeight = pdfDoc.internal.pageSize.getHeight();
+    let y = 32;
+    for (const ln of lines) {
+      if (y > pageHeight - 12) { pdfDoc.addPage(); y = 15; }
+      pdfDoc.text(ln, 14, y);
+      y += 5;
+    }
+  };
+
+  // Fetch every project's tasks once (active project comes from memory). Async — run this
+  // BEFORE the share tap so the PDF itself can be built synchronously inside the gesture.
+  const fetchAllProjectData = async () => {
+    const projectData = [];
+    for (const p of projects) {
+      let projectTasks;
+      if (p.id === activeProjectId) {
+        projectTasks = tasks;
+      } else {
+        const snap = await getDoc(doc(db, 'projects', p.id));
+        projectTasks = snap.exists() ? snap.data().tasks || [] : [];
+      }
+      projectData.push({ project: p, tasks: (projectTasks || []).map(normalizeTaskForReport) });
+    }
+    return projectData;
+  };
+
+  const combinedNamePrefix = (withSupervisorReport, completedOpts) => {
+    let n = withSupervisorReport ? 'FullSupervisors' : 'Full';
+    if (completedOpts) n += 'Completed';
+    return n;
+  };
+
+  // Build the whole combined PDF from already-fetched data. Synchronous so it can run inside
+  // the share click handler (iOS drops navigator.share's activation if a network await
+  // precedes it). When summaryText is passed, it becomes page 1 for the WhatsApp share.
+  const buildCombinedPdf = (projectData, { withSupervisorReport, completedOpts, summaryText = null }) => {
+    const effectiveReportDate = reportDate;
+    const pdfDoc = new jsPDF('l', 'mm', 'a4');
+    let firstPage = true;
+    if (summaryText != null) {
+      buildSummaryPage(pdfDoc, summaryText, 'Combined', effectiveReportDate);
+      firstPage = false;
+    }
+
+    // One page per project
+    projectData.forEach(({ project, tasks: projectTasks }) => {
+      if (!firstPage) pdfDoc.addPage();
+      firstPage = false;
+      const filteredForReport = projectTasks
+        .map((t, idx) => ({ ...t, originalIndex: idx }))
+        .filter(t => t.status !== 'completed' || t.completedAt === TODAY);
+      buildProjectTable(pdfDoc, filteredForReport, project.name, effectiveReportDate, projectTasks, null, project.assignedTo || []);
+    });
+
+    // Per-supervisor reports
+    if (withSupervisorReport) {
+      for (const supervisorName of ASSIGNED_OPTIONS) {
+        const sections = [];
+        for (const { project, tasks: projectTasks } of projectData) {
+          const leadsProject = (project.assignedTo || []).includes(supervisorName);
+          const subset = leadsProject
+            ? projectTasks
+                .map((t, idx) => ({ ...t, originalIndex: idx }))
+                .filter(t => t.status !== 'completed' || t.completedAt === TODAY)
+            : buildSupervisorSubset(projectTasks, supervisorName);
+          if (subset.length > 0) sections.push({ projectName: project.name, subset, wbsSource: projectTasks });
+        }
+        if (sections.length === 0) continue;
+        pdfDoc.addPage();
+        buildSupervisorReport(pdfDoc, supervisorName, sections, effectiveReportDate);
+      }
+    }
+
+    // Completed-tasks page(s) — only when there's completed work in the window
+    if (completedOpts) {
+      const completedSections = gatherCompletedSections(projectData, completedOpts.start, completedOpts.end);
+      if (completedSections.length > 0) {
+        pdfDoc.addPage();
+        buildCompletedReport(pdfDoc, completedSections, completedOpts.start, completedOpts.end, effectiveReportDate, completedOpts.label);
+      }
+    }
+
+    stampEstateHeader(pdfDoc);
+    return pdfDoc;
+  };
+
+  const SUMMARY_API_URL = process.env.REACT_APP_SUMMARY_API_URL || '';
+
+  // Web Share Level 2 file support — gate on a real File, in a secure context, within a gesture.
+  const canSharePdf = (file) =>
+    typeof navigator !== 'undefined' &&
+    window.isSecureContext &&
+    typeof navigator.share === 'function' &&
+    typeof navigator.canShare === 'function' &&
+    navigator.canShare({ files: [file] });
+
+  // Open the combined-report modal: pre-fetch every project's tasks (needed for a synchronous
+  // share build later), compute the combined digest instantly, then ask the Worker for a nicer
+  // AI summary. All network work happens HERE (on open), never in the share tap.
+  const openCombinedModal = () => {
+    setIncludeSupervisorReport(true);
+    setShareStats(null);
+    setShareSummary('');
+    setCombinedData(null);
+    setShowCombinedModal(true);
+    setShareLoading(true);
+    fetchAllProjectData()
+      .then(projectData => {
+        setCombinedData(projectData);
+        const combined = computeCombinedStats(projectData, reportDate);
+        setShareStats(combined);
+        setShareSummary(formatCombinedDigestText(combined));
+        if (!SUMMARY_API_URL) { setShareLoading(false); return; } // no worker → keep the digest
+        const headers = { 'content-type': 'application/json' };
+        if (process.env.REACT_APP_SUMMARY_KEY) headers['x-wbs-key'] = process.env.REACT_APP_SUMMARY_KEY;
+        return fetch(SUMMARY_API_URL, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ stats: combined, combined: true }),
+        })
+          .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+          .then(d => { if (d && d.summary) setShareSummary(d.summary); })
+          .catch(err => console.error('AI summary failed, using digest:', err))
+          .finally(() => setShareLoading(false));
+      })
+      .catch(err => {
+        console.error('Combined data fetch failed:', err);
+        setShareLoading(false);
+        alert(`Could not load project data.\n\n${err?.message || err}`);
+      });
+  };
+
+  // Desktop / unsupported: download the PDF, copy the text, open WhatsApp prefilled with
+  // the summary (wa.me can't carry a file — the user attaches the downloaded PDF).
+  const shareFallback = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), { href: url, download: filename });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    if (navigator.clipboard) navigator.clipboard.writeText(shareSummary).catch(() => {});
+    saveVersion(tasks, reportDate); // a download is a real share action
+    // Spread by code points so truncation never splits an emoji surrogate pair; guard the encode.
+    const text = [...shareSummary].slice(0, 1200).join('');
+    try {
+      window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
+    } catch {
+      window.open('https://wa.me/', '_blank', 'noopener');
+    }
+    setShowCombinedModal(false);
+    alert('PDF downloaded and summary copied.\n\nIn WhatsApp: pick a chat, paste the summary if it is not already there, then attach the downloaded PDF from your Downloads.');
+  };
+
+  // Share the combined report on WhatsApp. Built synchronously from the pre-fetched data so
+  // navigator.share keeps its user-gesture activation on iOS.
+  const shareCombined = () => {
+    if (!combinedData) return; // still loading — the button is disabled in this state
+    const withSup = includeSupervisorReport;
+    const completedOpts = buildCompletedOpts();
+    const filename = `${combinedNamePrefix(withSup, completedOpts)}_AjmerEstate_${formatDateFile(reportDate)}.pdf`;
+    let blob;
+    try {
+      blob = buildCombinedPdf(combinedData, { withSupervisorReport: withSup, completedOpts, summaryText: shareSummary }).output('blob');
+    } catch (err) {
+      console.error('Share PDF build failed:', err);
+      alert(`Could not build the combined PDF.\n\n${err?.message || err}`);
+      return;
+    }
+    const file = new File([blob], filename, { type: 'application/pdf' });
+    if (canSharePdf(file)) {
+      navigator.share({ files: [file], text: shareSummary, title: 'Ajmer Estate — Site Update' })
+        .then(() => { saveVersion(tasks, reportDate); setShowCombinedModal(false); })
+        .catch(err => {
+          if (err && err.name === 'AbortError') return; // user dismissed the share sheet
+          console.error('navigator.share failed, falling back:', err);
+          shareFallback(blob, filename);
+        });
+    } else {
+      shareFallback(blob, filename);
+    }
+  };
+
   // Print current project
   const handlePrintPDF = () => {
     const effectiveTasksFull = viewingVersion ? viewingVersion.tasks : tasks;
@@ -1184,69 +1485,14 @@ const result = [];
     return { start: shiftIsoDate(reportDate, -(days - 1)), end: reportDate, label: `last ${days} days` };
   };
 
-  const handleCombinedReport = async (withSupervisorReport = true, completedOpts = null) => {
+  // Download the combined report. Reuses data already fetched for the modal when available
+  // (prefetched), otherwise fetches it. Alt+R calls this with no args → fetches fresh.
+  const handleCombinedReport = async (withSupervisorReport = true, completedOpts = null, prefetched = null) => {
     setShowCombinedModal(false);
     try {
-      const effectiveReportDate = reportDate;
-      const pdfDoc = new jsPDF('l', 'mm', 'a4');
-
-      // Fetch every project's tasks once so the main report and supervisor reports share data
-      const projectData = [];
-      for (const p of projects) {
-        let projectTasks;
-        if (p.id === activeProjectId) {
-          projectTasks = tasks;
-        } else {
-          const snap = await getDoc(doc(db, 'projects', p.id));
-          projectTasks = snap.exists() ? snap.data().tasks || [] : [];
-        }
-        projectData.push({ project: p, tasks: (projectTasks || []).map(normalizeTaskForReport) });
-      }
-
-      // Main combined report — one page per project
-      projectData.forEach(({ project, tasks: projectTasks }, i) => {
-        if (i > 0) pdfDoc.addPage();
-        const filteredForReport = projectTasks
-          .map((t, idx) => ({ ...t, originalIndex: idx }))
-          .filter(t => t.status !== 'completed' || t.completedAt === TODAY);
-        buildProjectTable(pdfDoc, filteredForReport, project.name, effectiveReportDate, projectTasks, null, project.assignedTo || []);
-      });
-
-      // Per-supervisor reports
-      if (withSupervisorReport) {
-        for (const supervisorName of ASSIGNED_OPTIONS) {
-          const sections = [];
-          for (const { project, tasks: projectTasks } of projectData) {
-            // A project lead is treated as assigned to the whole project, so show every active task;
-            // otherwise just their own tasks plus parent/child context.
-            const leadsProject = (project.assignedTo || []).includes(supervisorName);
-            const subset = leadsProject
-              ? projectTasks
-                  .map((t, idx) => ({ ...t, originalIndex: idx }))
-                  .filter(t => t.status !== 'completed' || t.completedAt === TODAY)
-              : buildSupervisorSubset(projectTasks, supervisorName);
-            if (subset.length > 0) sections.push({ projectName: project.name, subset, wbsSource: projectTasks });
-          }
-          if (sections.length === 0) continue;
-          pdfDoc.addPage();
-          buildSupervisorReport(pdfDoc, supervisorName, sections, effectiveReportDate);
-        }
-      }
-
-      // Completed-tasks page(s) — only added when there's actually completed work in the window,
-      // so an empty selection never leaves a blank page.
-      if (completedOpts) {
-        const completedSections = gatherCompletedSections(projectData, completedOpts.start, completedOpts.end);
-        if (completedSections.length > 0) {
-          pdfDoc.addPage();
-          buildCompletedReport(pdfDoc, completedSections, completedOpts.start, completedOpts.end, effectiveReportDate, completedOpts.label);
-        }
-      }
-
-      stampEstateHeader(pdfDoc);
-      let namePrefix = withSupervisorReport ? 'FullSupervisors' : 'Full';
-      if (completedOpts) namePrefix += 'Completed';
-      pdfDoc.save(`${namePrefix}_AjmerEstate_${formatDateFile(effectiveReportDate)}.pdf`);
+      const projectData = prefetched || await fetchAllProjectData();
+      const pdfDoc = buildCombinedPdf(projectData, { withSupervisorReport, completedOpts });
+      pdfDoc.save(`${combinedNamePrefix(withSupervisorReport, completedOpts)}_AjmerEstate_${formatDateFile(reportDate)}.pdf`);
       saveVersion(tasks, reportDate);
     } catch (err) {
       // Never fail silently — surface it so the report is debuggable instead of just "not working".
@@ -1403,7 +1649,7 @@ const result = [];
               <button className={`secondary-btn orig-toggle-btn ${showOriginal ? 'toggle-active' : ''}`} title="Alt + D" onClick={() => setShowOriginal(p => !p)}>{showOriginal ? 'Hide Original' : 'Show Original'}</button>
               <button className="secondary-btn history-btn" onClick={() => { setShowHistory(true); loadHistory(); }}>History</button>
               <button className="secondary-btn print-btn" onClick={handlePrintPDF}>Print PDF</button>
-              <button className="secondary-btn combined-btn" onClick={() => { setIncludeSupervisorReport(true); setShowCombinedModal(true); }}>Combined Report</button>
+              <button className="secondary-btn combined-btn" onClick={openCombinedModal}>Combined Report</button>
               <button className="secondary-btn" onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: true}))})) : syncTasks(tasks.map(t => ({...t, isCollapsed: true})))}>Collapse All</button>
               <button className="secondary-btn" onClick={() => viewingVersion ? setViewingVersion(v => ({...v, tasks: v.tasks.map(t => ({...t, isCollapsed: false}))})) : syncTasks(tasks.map(t => ({...t, isCollapsed: false})))}>Expand All</button>
               <button className="secondary-btn delete-all" onClick={() => window.confirm("Clear project?") && syncTasks([{ id: 'init', text: '', level: 0, isCollapsed: false, assignedTo: [], status: '-', statusType: 'text', tillYest: '', today: '', totalTarget: '', origStartDate: '', origDays: '', origEndDate: '' }])}>Clear All</button>
@@ -1968,10 +2214,32 @@ const result = [];
                   )}
                 </div>
               )}
+
+              <div className="share-block">
+                <div className="share-block-label">WhatsApp message <span>(used only when you Share — becomes page 1 of the shared PDF)</span></div>
+                <p className="share-hint">
+                  {!combinedData ? 'Preparing summary…' : shareLoading ? 'Writing AI summary…' : 'Edit the message if you like, then Share.'}
+                </p>
+                <textarea
+                  className="share-summary-textarea"
+                  value={shareSummary}
+                  onChange={e => setShareSummary(e.target.value)}
+                  rows={10}
+                  spellCheck={false}
+                  placeholder={combinedData ? '' : 'Preparing summary…'}
+                />
+                {shareStats && (
+                  <p className="share-counts">
+                    ✅ {shareStats.totals.completedToday} completed today &nbsp;·&nbsp; ⛔ {shareStats.totals.stuck} stuck
+                    {SUMMARY_API_URL ? '' : ' · AI worker not configured, using built-in digest'}
+                  </p>
+                )}
+              </div>
             </div>
             <div className="combined-modal-footer">
               <button className="secondary-btn" onClick={() => setShowCombinedModal(false)}>Cancel</button>
-              <button className="secondary-btn combined-btn" onClick={() => handleCombinedReport(includeSupervisorReport, buildCompletedOpts())}>Generate Report</button>
+              <button className="secondary-btn" disabled={!combinedData} onClick={() => handleCombinedReport(includeSupervisorReport, buildCompletedOpts(), combinedData)}>Download PDF</button>
+              <button className="secondary-btn combined-btn" disabled={!combinedData} onClick={shareCombined}>{combinedData ? 'Share on WhatsApp' : 'Preparing…'}</button>
             </div>
           </div>
         </div>

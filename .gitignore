@@ -22,3 +22,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .claude/launch.json
+
+# Claude Code worktrees (embedded repos)
+.claude/worktrees/
