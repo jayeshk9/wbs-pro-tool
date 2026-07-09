@@ -49,11 +49,23 @@ requests/day) covers the hosting.
 
 ## Request / response
 
-`POST /` with JSON:
+`POST /` with JSON. The app sends the **combined** (all-projects) shape:
 ```json
-{ "stats": { "project": "...", "date": "09/07/26", "counts": {...}, "completedToday": [...], "stuck": [...] } }
+{
+  "combined": true,
+  "stats": {
+    "date": "09/07/26",
+    "totals": { "completedToday": 3, "stuck": 1, "inProgress": 5, "toBeStarted": 2 },
+    "projects": [
+      { "project": "Sector 1", "counts": {...}, "completedToday": [...], "stuck": [...] }
+    ]
+  }
+}
 ```
+The Worker also still accepts the legacy single-project shape
+(`{ "stats": { "project": "...", "date": "...", "counts": {...}, "completedToday": [...], "stuck": [...] } }`).
+
 Returns:
 ```json
-{ "summary": "*Project — Site Update*\n_09/07/26_\n\n✅ *Completed today (3)* ..." }
+{ "summary": "*Ajmer Estate — Site Update*\n_09/07/26_\n✅ 3 completed today   ⛔ 1 stuck ..." }
 ```

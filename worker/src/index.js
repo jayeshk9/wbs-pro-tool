@@ -19,9 +19,11 @@
 
 const MODEL = 'claude-haiku-4-5';
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
-const MAX_BODY_CHARS = 16000; // reject oversized payloads up front
+const MAX_BODY_CHARS = 32000; // reject oversized payloads up front
 const MAX_ITEMS = 80;         // cap each task list so prompt tokens stay bounded
+const MAX_PROJECTS = 40;      // cap projects in a combined payload
 
+// Single-project payload: { project, date, counts, completedToday, stuck }
 const SYSTEM_PROMPT = `You write short daily WhatsApp status updates for construction site supervisors, from structured project data (JSON).
 
 Hard rules:
@@ -41,6 +43,29 @@ Line 2: _<date>_
 One final line: the single most important thing to watch (the worst slip or the longest-stuck task). One sentence.
 
 Keep the whole message under ~900 characters. Be terse. Do not add anything not present in the data.`;
+
+// Combined (all-projects) payload: { date, totals, projects:[{ project, counts, completedToday, stuck }] }
+const COMBINED_SYSTEM_PROMPT = `You write a short daily WhatsApp status update for a real-estate developer, summarising ALL projects of "Ajmer Estate" from structured data (JSON).
+
+Hard rules:
+- Use ONLY the data provided. NEVER invent tasks, names, numbers, dates, deviations, or reasons. If a field is missing, say so plainly.
+- Output plain text formatted for WhatsApp: *bold* for headings, "•" for bullets. No markdown headings (#), no code fences, no tables.
+
+Structure exactly:
+Line 1: *Ajmer Estate — Site Update*
+Line 2: _<date>_
+Line 3: ✅ <totals.completedToday> completed today   ⛔ <totals.stuck> stuck
+Then, for EACH project that has any completed-today or stuck work (skip projects with none of both):
+(blank line)
+*<project>*
+✅ Completed today (N)
+ • one bullet per completed task: "<path › task name> — <deviation> [<assignees>]". Use the deviation string exactly as given. If none, a single bullet "• None".
+⛔ Stuck (N)
+ • one bullet per stuck task: "<path › task name> — <reason from remarks> [<assignees>]". If a task has no remark, write "no remark added". If none, a single bullet "• None".
+(blank line)
+One final line: the single most important thing to watch across the whole estate (the worst slip or the longest-stuck task). One sentence.
+
+Be terse. Do not add anything not present in the data.`;
 
 export default {
   async fetch(request, env) {
@@ -64,15 +89,29 @@ export default {
     if (!stats || typeof stats !== 'object') return json({ error: 'missing stats' }, 400, cors);
     if (!env.ANTHROPIC_API_KEY) return json({ error: 'server not configured (no ANTHROPIC_API_KEY)' }, 500, cors);
 
-    // Bound the prompt regardless of what the client sent.
+    // Bound the prompt regardless of what the client sent. Two payload shapes are
+    // supported: combined (an all-projects report with a `projects` array) and the
+    // legacy single-project shape. The combined shape is what the app sends today.
     const trim = (arr) => (Array.isArray(arr) ? arr.slice(0, MAX_ITEMS) : []);
-    const safeStats = {
-      project: String(stats.project || '').slice(0, 200),
-      date: String(stats.date || '').slice(0, 40),
-      counts: stats.counts && typeof stats.counts === 'object' ? stats.counts : {},
-      completedToday: trim(stats.completedToday),
-      stuck: trim(stats.stuck),
-    };
+    const isCombined = Array.isArray(stats.projects);
+    const safeStats = isCombined
+      ? {
+          date: String(stats.date || '').slice(0, 40),
+          totals: stats.totals && typeof stats.totals === 'object' ? stats.totals : {},
+          projects: stats.projects.slice(0, MAX_PROJECTS).map(p => ({
+            project: String(p.project || '').slice(0, 200),
+            counts: p.counts && typeof p.counts === 'object' ? p.counts : {},
+            completedToday: trim(p.completedToday),
+            stuck: trim(p.stuck),
+          })),
+        }
+      : {
+          project: String(stats.project || '').slice(0, 200),
+          date: String(stats.date || '').slice(0, 40),
+          counts: stats.counts && typeof stats.counts === 'object' ? stats.counts : {},
+          completedToday: trim(stats.completedToday),
+          stuck: trim(stats.stuck),
+        };
 
     try {
       const r = await fetch(ANTHROPIC_URL, {
@@ -84,8 +123,8 @@ export default {
         },
         body: JSON.stringify({
           model: MODEL,
-          max_tokens: 400,
-          system: SYSTEM_PROMPT,
+          max_tokens: isCombined ? 800 : 400,
+          system: isCombined ? COMBINED_SYSTEM_PROMPT : SYSTEM_PROMPT,
           messages: [{ role: 'user', content: 'Project report data (JSON):\n' + JSON.stringify(safeStats) }],
         }),
       });
