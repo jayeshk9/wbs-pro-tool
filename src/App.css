@@ -1335,3 +1335,9 @@ input[type="number"] {
 }
 .share-summary-textarea:focus { outline: none; border-color: var(--primary); }
 .share-counts { font-size: 12px; color: #4b5563; margin: 10px 0 0; }
+
+/* Combined modal — WhatsApp message block */
+.share-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.share-block-label { font-size: 13px; font-weight: 700; color: #111827; margin-bottom: 4px; }
+.share-block-label span { font-weight: 400; color: #6b7280; font-size: 11px; }
+.combined-modal-footer button:disabled { opacity: 0.5; cursor: not-allowed; }
