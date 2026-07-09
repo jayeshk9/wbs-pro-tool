@@ -7,7 +7,7 @@
     // Set this to your deployed WBS app origin(s). Example:
     //   "https://ajmerestatewbs.web.app,https://ajmerestatewbs.firebaseapp.com"
     // Leave "" for local development (falls back to allowing any origin).
-    "ALLOWED_ORIGINS": ""
+    "ALLOWED_ORIGINS": "https://ajmerestatewbs.web.app,https://ajmerestatewbs.firebaseapp.com"
   }
   // ANTHROPIC_API_KEY is a SECRET, not a var. Set it with:
   //   npx wrangler secret put ANTHROPIC_API_KEY
